@@ -155,7 +155,7 @@ local MissionState = {
         lrSamZones = {},  -- Long range SAM deployment zones
         truckSpawnZones = {},  -- Multiple truck spawn zones (SUPPORT_TRUCK_DEPLOY, SUPPORT_TRUCK_DEPLOY-1, etc.)
         heloSpawnZones = {},   -- Multiple helo spawn zones (SUPPORT_HELO_DEPLOY, SUPPORT_HELO_DEPLOY-1, etc.)
-        ammoSpawnZones = {},  -- Ammo supply zone for supply cargo spawning
+        ammoSpawnZones = {},  -- Multiple ammo supply zones for supply cargo spawning
         truckSpawn = nil,  -- Legacy single truck spawn zone
         heloSpawn = nil   -- Legacy single helo spawn zone
     },
@@ -182,6 +182,7 @@ local MissionState = {
     originalUnitsInZone = {},
     spawnedCargo = {},  -- Track currently spawned cargo objects
     cargoSpawnCount = 0, -- Counter for unique cargo naming
+    gridStates = {},    -- Track grid positioning state for each ammo supply zone
     
     -- Group cache for reducing coalition.getGroups() calls
     groupCache = {
@@ -2021,12 +2022,15 @@ end
 function CargoManagement.initialize()
     Utils.showDebugMessage("=== INITIALIZING CARGO MANAGEMENT SYSTEM ===", 5, 2)
     
-    -- Discover and load the ammo supply zones
-    MissionState.zones.ammoSpawnZones = Utils.getZoneByName(CONFIG.ZONES.SUPPORT_AMMO_SUPPLY)
-    if not MissionState.zones.ammoSpawnZones then
-        Utils.showDebugMessage("WARNING: Ammo Spawn zone '" .. CONFIG.ZONES.SUPPORT_AMMO_SUPPLY .. "' not found! Cargo spawning disabled.", 10, 1)
+    -- Discover multiple ammo supply zones
+    CargoManagement.discoverAmmoSupplyZones()
+    
+    if not MissionState.zones.ammoSpawnZones or #MissionState.zones.ammoSpawnZones == 0 then
+        Utils.showDebugMessage("WARNING: No ammo supply zones found! Cargo spawning disabled.", 10, 1)
         return false
     end
+    
+    Utils.showDebugMessage("Found " .. #MissionState.zones.ammoSpawnZones .. " ammo supply zones", 8, 1)
     
     -- Spawn initial supply objects
     CargoManagement.spawnInitialSupplyObjects()
@@ -2034,10 +2038,66 @@ function CargoManagement.initialize()
     return true
 end
 
--- Spawn the initial supply objects in the ammo supply zone
+-- Discover all ammo supply zones (similar to other zone discovery functions)
+function CargoManagement.discoverAmmoSupplyZones()
+    local ammoZones = {}
+    
+    Utils.showDebugMessage("Discovering ammo supply zones...", 5, 2)
+    
+    -- Try to discover zones using mission data first
+    local env = _G.env or {}
+    if env.mission and env.mission.triggers and env.mission.triggers.zones then
+        for _, zone in pairs(env.mission.triggers.zones) do
+            if zone.name then
+                local zoneName = zone.name
+                
+                -- Check for ammo supply zones
+                if string.find(zoneName, "^" .. CONFIG.ZONES.SUPPORT_AMMO_SUPPLY) then
+                    local zoneObj = trigger.misc.getZone(zoneName)
+                    if zoneObj then
+                        table.insert(ammoZones, {
+                            name = zoneName,
+                            zone = zoneObj
+                        })
+                        Utils.showDebugMessage("Found ammo supply zone: " .. zoneName, 5, 2)
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Fallback: Try to get zones by name pattern
+    if #ammoZones == 0 then
+        Utils.showDebugMessage("No ammo zones found via mission data, trying name-based discovery...", 5, 2)
+        
+        -- Try common naming patterns for ammo zones
+        for i = 0, 20 do  -- Check up to 20 numbered zones
+            local suffix = (i == 0) and "" or ("-" .. i)
+            
+            local ammoZoneName = CONFIG.ZONES.SUPPORT_AMMO_SUPPLY .. suffix
+            local ammoZone = trigger.misc.getZone(ammoZoneName)
+            if ammoZone then
+                table.insert(ammoZones, {
+                    name = ammoZoneName,
+                    zone = ammoZone
+                })
+                Utils.showDebugMessage("Found ammo supply zone: " .. ammoZoneName, 5, 2)
+            end
+        end
+    end
+    
+    -- Store discovered zones
+    MissionState.zones.ammoSpawnZones = ammoZones
+    
+    Utils.showMessage("Discovered " .. #ammoZones .. " ammo supply zones", 8)
+    
+    return #ammoZones > 0
+end
+
+-- Spawn the initial supply objects distributed evenly across all ammo supply zones
 function CargoManagement.spawnInitialSupplyObjects()
-    if not MissionState.zones.ammoSpawnZones then
-        Utils.showDebugMessage("Cannot spawn initial supply objects - ammo supply zone not available", 5)
+    if not MissionState.zones.ammoSpawnZones or #MissionState.zones.ammoSpawnZones == 0 then
+        Utils.showDebugMessage("Cannot spawn initial supply objects - no ammo supply zones available", 5)
         return false
     end
     
@@ -2047,24 +2107,48 @@ function CargoManagement.spawnInitialSupplyObjects()
     end
     
     local objectsToSpawn = CONFIG.STARTING_SUPPLY_OBJECTS or 10
-    Utils.showDebugMessage("Spawning " .. objectsToSpawn .. " initial supply objects in " .. CONFIG.ZONES.SUPPORT_AMMO_SUPPLY .. "...", 8,1)
+    local numZones = #MissionState.zones.ammoSpawnZones
+    local objectsPerZone = math.floor(objectsToSpawn / numZones)
+    local remainingObjects = objectsToSpawn % numZones
+    
+    Utils.showDebugMessage("Distributing " .. objectsToSpawn .. " initial supply objects across " .. numZones .. " ammo supply zones (" .. objectsPerZone .. " per zone + " .. remainingObjects .. " extra)...", 8, 1)
     
     local successCount = 0
     local failureCount = 0
     
-    for i = 1, objectsToSpawn do
-        local success = CargoManagement.spawnRandomSupplyObject()
-        if success then
-            successCount = successCount + 1
-        else
-            failureCount = failureCount + 1
+    -- Spawn objects in each zone
+    for zoneIndex, zoneInfo in ipairs(MissionState.zones.ammoSpawnZones) do
+        local objectsForThisZone = objectsPerZone
+        
+        -- Distribute remaining objects to first zones
+        if zoneIndex <= remainingObjects then
+            objectsForThisZone = objectsForThisZone + 1
         end
         
-        -- Small delay between spawns to prevent issues
-        if i < objectsToSpawn then
-            timer.scheduleFunction(function()
-                return nil
-            end, nil, timer.getTime() + 0.1)
+        Utils.showDebugMessage("Spawning " .. objectsForThisZone .. " objects in zone: " .. zoneInfo.name, 8, 2)
+        
+        -- Reset grid for each zone
+        MissionState.gridStates = MissionState.gridStates or {}
+        MissionState.gridStates[zoneInfo.name] = {
+            currentGrid = 1,
+            currentRow = 1,
+            currentCol = 1
+        }
+        
+        for i = 1, objectsForThisZone do
+            local success = CargoManagement.spawnRandomSupplyObject(zoneInfo.zone)
+            if success then
+                successCount = successCount + 1
+            else
+                failureCount = failureCount + 1
+            end
+            
+            -- Small delay between spawns to prevent issues
+            if i < objectsForThisZone then
+                timer.scheduleFunction(function()
+                    return nil
+                end, nil, timer.getTime() + 0.1)
+            end
         end
     end
     
@@ -2074,11 +2158,15 @@ function CargoManagement.spawnInitialSupplyObjects()
     return successCount > 0
 end
 
--- Spawn a random supply object in the ammo supply zone
-function CargoManagement.spawnRandomSupplyObject()
-    if not MissionState.zones.ammoSpawnZones then
-        Utils.showDebugMessage("Cannot spawn supply object - ammo supply zone not available", 5, 3)
-        return false
+-- Spawn a random supply object in a specific zone using 6x6 grid pattern
+function CargoManagement.spawnRandomSupplyObject(targetZone)
+    -- If no zone specified, use the first available zone (backward compatibility)
+    if not targetZone then
+        if not MissionState.zones.ammoSpawnZones or #MissionState.zones.ammoSpawnZones == 0 then
+            Utils.showDebugMessage("Cannot spawn supply object - no ammo supply zones available", 5, 3)
+            return false
+        end
+        targetZone = MissionState.zones.ammoSpawnZones[1].zone
     end
     
     -- Select random supply object type
@@ -2086,10 +2174,10 @@ function CargoManagement.spawnRandomSupplyObject()
     local randomIndex = math.random(1, #objectTypes)
     local selectedType = objectTypes[randomIndex]
     
-    -- Generate position within the specified zone
-    local spawnPos = CargoManagement.getRandomPositionInZone(MissionState.zones.ammoSpawnZones)
+    -- Generate position within the specified zone using 6x6 grid
+    local spawnPos = CargoManagement.getGridPositionInZone(targetZone)
     if not spawnPos then
-        Utils.showDebugMessage("Failed to generate position in target zone", 5)
+        Utils.showDebugMessage("Failed to generate grid position in target zone", 5)
         return false
     end
     
@@ -2138,52 +2226,90 @@ function CargoManagement.spawnRandomSupplyObject()
     end
 end
 
--- Generate a random position within a zone, avoiding overlaps with existing cargo
-function CargoManagement.getRandomPositionInZone(zone)
+-- Generate a position within a zone using 6x6 grid pattern, expanding to new grids as needed
+function CargoManagement.getGridPositionInZone(zone)
     if not zone or not zone.point or not zone.radius then
-        Utils.showDebugMessage("Invalid zone data for random position generation", 5, 3)
+        Utils.showDebugMessage("Invalid zone data for grid position generation", 5, 3)
         return nil
     end
     
-    local maxAttempts = 50
-    local minDistance = 5 -- Minimum distance between cargo objects
-    
-    for attempt = 1, maxAttempts do
-        -- Generate random angle and distance
-        local angle = math.random() * 2 * math.pi
-        local maxRadius = zone.radius * 0.8 -- Stay within 80% of zone radius for safety
-        local distance = math.random() * maxRadius
-        
-        -- Calculate position
-        local x = zone.point.x + distance * math.cos(angle)
-        local z = zone.point.z + distance * math.sin(angle)
-        
-        local newPos = {x = x, z = z}
-        
-        -- Check for conflicts with existing cargo
-        local validPosition = true
-        for _, existingCargo in pairs(MissionState.spawnedCargo) do
-            if existingCargo.position then
-                local distance = Utils.getDistance(newPos, existingCargo.position)
-                if distance < minDistance then
-                    validPosition = false
-                    break
-                end
-            end
-        end
-        
-        if validPosition then
-            Utils.showDebugMessage("Found valid position after " .. attempt .. " attempts: (" .. x .. ", " .. z .. ")", 5, 3)
-            return newPos
+    -- Find zone name for grid state tracking
+    local zoneName = nil
+    for _, zoneInfo in pairs(MissionState.zones.ammoSpawnZones or {}) do
+        if zoneInfo.zone == zone then
+            zoneName = zoneInfo.name
+            break
         end
     end
     
-    Utils.showDebugMessage("Failed to find valid position after " .. maxAttempts .. " attempts, using fallback", 5, 2)
-    -- Fallback to zone center with small random offset
-    return {
-        x = zone.point.x + (math.random() - 0.5) * 10,
-        z = zone.point.z + (math.random() - 0.5) * 10
-    }
+    if not zoneName then
+        zoneName = "unknown_zone"
+    end
+    
+    -- Initialize grid state for this zone if not exists
+    MissionState.gridStates = MissionState.gridStates or {}
+    if not MissionState.gridStates[zoneName] then
+        MissionState.gridStates[zoneName] = {
+            currentGrid = 1,
+            currentRow = 1,
+            currentCol = 1
+        }
+    end
+    
+    local gridState = MissionState.gridStates[zoneName]
+    local gridSize = 6  -- 6x6 grid
+    local objectSpacing = 8  -- 8 meters between objects
+    local gridSpacing = gridSize * objectSpacing + 20  -- Space between grids (20m buffer)
+    
+    -- Calculate grid offset (grids expand southward)
+    local gridRow = gridState.currentGrid - 1
+    local gridOffsetZ = gridRow * gridSpacing
+    
+    -- Calculate position within current grid
+    local row = gridState.currentRow - 1  -- 0-based for calculation
+    local col = gridState.currentCol - 1  -- 0-based for calculation
+    
+    -- Position relative to zone center
+    local startX = -(gridSize - 1) * objectSpacing / 2  -- Center the grid on zone
+    local startZ = -(gridSize - 1) * objectSpacing / 2 + gridOffsetZ  -- Apply grid offset
+    
+    local x = zone.point.x + startX + (col * objectSpacing)
+    local z = zone.point.z + startZ + (row * objectSpacing)
+    
+    Utils.showDebugMessage("Grid position for " .. zoneName .. " - Grid:" .. gridState.currentGrid .. " Row:" .. gridState.currentRow .. " Col:" .. gridState.currentCol .. " at (" .. x .. ", " .. z .. ")", 5, 3)
+    
+    -- Advance to next position
+    gridState.currentCol = gridState.currentCol + 1
+    if gridState.currentCol > gridSize then
+        gridState.currentCol = 1
+        gridState.currentRow = gridState.currentRow + 1
+        if gridState.currentRow > gridSize then
+            gridState.currentRow = 1
+            gridState.currentGrid = gridState.currentGrid + 1
+            Utils.showDebugMessage("Starting new grid " .. gridState.currentGrid .. " for zone " .. zoneName, 5, 2)
+        end
+    end
+    
+    return {x = x, z = z}
+end
+
+-- Helper function to get a specific ammo supply zone (for backward compatibility and specific zone access)
+function CargoManagement.getAmmoSupplyZone(zoneIndex)
+    if not MissionState.zones.ammoSpawnZones or #MissionState.zones.ammoSpawnZones == 0 then
+        return nil
+    end
+    
+    zoneIndex = zoneIndex or 1  -- Default to first zone
+    if zoneIndex <= #MissionState.zones.ammoSpawnZones then
+        return MissionState.zones.ammoSpawnZones[zoneIndex].zone
+    end
+    
+    return nil
+end
+
+-- Get all ammo supply zones
+function CargoManagement.getAllAmmoSupplyZones()
+    return MissionState.zones.ammoSpawnZones or {}
 end
 
 -- =====================================================================================
