@@ -1,8 +1,8 @@
 -- =====================================================================================
--- DCS REINFORCED AUTO-RESUPPLY MISSION SCRIPT - COMPLETE VERSION
+-- DCS AUTO-RESUPPLY MISSION SCRIPT - COMPLETE VERSION
 -- Description: Automated supply truck and helicopter missions for local SAM site replacement
 -- Author: MythNZ
--- Version: 0.3.25 (Inital Release)
+-- Version: 0.3.24 Supply Management
 -- =====================================================================================
 
 -- =====================================================================================
@@ -10,11 +10,6 @@
 -- =====================================================================================
 
 local CONFIG = {
-
-    CHECK_INTERVAL = 10, -- Interval for checking zones and units (in seconds)
-    HELICOPTER_CHECK_INTERVAL = 3, -- Faster interval for helicopter monitoring (in seconds)
-    DEBUG_MODE = 1, -- Debug levels: 0=off, 1=basic, 2=detailed, 3=verbose
-
     -- Zone Names (must match mission editor exactly)
     ZONES = {
         SUPPORT_HELO_DEPLOY = "SUPPORT_HELO_DEPLOY", -- Base name for helo deployment zones (supports numbered variants: SUPPORT_HELO_DEPLOY-1, SUPPORT_HELO_DEPLOY-2, etc.)
@@ -26,18 +21,20 @@ local CONFIG = {
         MAX_CONCURRENT_DEPLOYMENTS = 10 -- Maximum number of concurrent deployments
     },
     
-    -- Coalition Mission Parameters
+    -- Mission Parameters
     RED_COALITION = coalition.side.RED,
     BLUE_COALITION = coalition.side.BLUE,
-
-    -- Spawn Limits
+    CHECK_INTERVAL = 10, -- Interval for checking zones and units (in seconds)
+    HELICOPTER_CHECK_INTERVAL = 3, -- Faster interval for helicopter monitoring (in seconds)
+    DEBUG_MODE = 1, -- Debug levels: 0=off, 1=basic, 2=detailed, 3=verbose
+    
+    -- Spawn Limits the sum will be the starting
     SPAWN_LIMITS = {
         TRUCK = 5,
         HELO = 5
     },
 
-    -- Starting Supply Objects this will be divided across supply zones
-    STARTING_SUPPLY_OBJECTS = 80, 
+    STARTING_SUPPLY_OBJECTS = 10, -- Number of initial supply objects to spawn in the SUPPORT_AMMO_SUPPLY zone
     
     -- SAM Deployment Settings
     SAM = {
@@ -46,12 +43,14 @@ local CONFIG = {
         UNIT_SPACING = 30,
         CLEANUP_DELAY = 15, -- Increased to 15 seconds for ultra-safe vehicle cleanup after SAM deployment (especially for helicopters)
         ENABLE_VEHICLE_CLEANUP = true, -- Re-enabled with safer cleanup method
-
+        -- Position randomization settings
         POSITION_RANDOMIZATION = {
             ENABLED = true,
             MAX_OFFSET = 15, -- Maximum random offset in meters
             MIN_DISTANCE = 8  -- Minimum distance between units
-        }
+        },
+        -- Safe cleanup position (not used in ultra-safe mode, but kept for reference)
+        SAFE_CLEANUP_POSITION = {x = -50000, y = 0, z = -50000}
     },
     
     -- Vehicle Route Settings
@@ -59,43 +58,46 @@ local CONFIG = {
         TRUCK_SPEED = 20,
         HELO_SPEED = 50,
         HELO_ALTITUDE = 500,
-        ENABLE_HELICOPTER_SPAWNING = true
+        ENABLE_HELICOPTER_SPAWNING = true -- IMPORTANT: Disabled by default due to potential crash issues
+        -- CRASH SAFETY: Set to true ONLY if you're confident in your DCS stability
+        -- Helicopters may cause crashes due to complex spawning requirements and DCS engine limitations
+        -- v0.3.16: Added comprehensive crash prevention, but keep disabled until thoroughly tested
     },
 
     SAM_UNITS = {
         SHORT_RANGE = {
             [country.id.CJTF_BLUE] = {
-                { type = "M 818", skill = "High" },
                 { type = "NASAMS_Command_Post", skill = "High" },
                 { type = "NASAMS_Radar_MPQ64F1", skill = "High" },
+                { type = "M 818", skill = "High" },
                 { type = "NASAMS_LN_B", skill = "High" }
             },
             [country.id.CJTF_RED] = {
-                { type = "Ural-4320-31", skill = "High" },
-                { type = "5p73 s-125 ln", skill = "High" },  -- Short range launcher unit
-                { type = "5p73 s-125 ln", skill = "High" },  -- Short range launcher unit
-                { type = "snr s-125 tr", skill = "High" },  -- Short range Track radar unit
-                { type = "p-19 s-125 sr", skill = "High" },  -- Short range Search radar unit
+                { type = "snr s-125 tr", skill = "High" },  -- Short range radar unit
+                -- { type = "5p73 s-125 ln", skill = "High" },  -- Short range launcher unit
+                -- { type = "5p73 s-125 ln", skill = "High" },  -- Short range launcher unit
+                { type = "p-19 s-125 sr", skill = "High" },  -- Short range command post unit
+                { type = "Ural-4320-31", skill = "High" }
 
             }
         },
         LONG_RANGE = {
             [country.id.CJTF_BLUE] = {
-                { type = "M 818", skill = "High" },
                 { type = "Hawk cwar", skill = "High" },
                 { type = "Hawk ln", skill = "High" },
                 { type = "Hawk ln", skill = "High" },
                 { type = "Hawk pcp", skill = "High" },
                 { type = "Hawk sr", skill = "High" },
                 { type = "Hawk tr", skill = "High" },
+                { type = "M 818", skill = "High" }
             },
             [country.id.CJTF_RED] = {
+                { type = "Kub 2P25 ln", skill = "High" },  -- Medium range launcher unit
+                -- { type = "Kub 2P25 ln", skill = "High" },  -- Medium range launcher unit
+                -- { type = "Kub 2P25 ln", skill = "High" }  -- Medium range launcher unit
+                { type = "Kub 1S91 str", skill = "High" },  -- Medium range Search Track Radar unit
+                { type = "Kub 1S91 str", skill = "High" },  -- Medium range Search Track Radar unit
                 { type = "Ural-4320-31", skill = "High" }, 
-                { type = "Kub 2P25 ln", skill = "High" },  -- Medium range launcher unit
-                { type = "Kub 2P25 ln", skill = "High" },  -- Medium range launcher unit
-                { type = "Kub 2P25 ln", skill = "High" },  -- Medium range launcher unit
-                { type = "Kub 1S91 str", skill = "High" },  -- Medium range Search Track Radar unit
-                { type = "Kub 1S91 str", skill = "High" },  -- Medium range Search Track Radar unit
             }
         },
     },
@@ -105,8 +107,8 @@ local CONFIG = {
         TRUCK = {
             [country.id.CJTF_BLUE] = {
                 { type = "M 818", skill = "High" },
-                -- { type = "Hummer", skill = "High" },
-                -- { type = "M1043 HMMWV Armament", skill = "High" }
+                { type = "Hummer", skill = "High" },
+                { type = "M1043 HMMWV Armament", skill = "High" }
             },
             [country.id.CJTF_RED] = {
                 { type = "Ural-375", skill = "High" },
@@ -116,8 +118,8 @@ local CONFIG = {
         },
         HELICOPTER = {
             [country.id.CJTF_BLUE] = {
-                { type = "Mi-8MT", skill = "High", livery = nil },
-                -- { type = "UH-1H", skill = "High", livery = nil }
+                { type = "UH-1H", skill = "High", livery = nil },
+                { type = "Mi-8MT", skill = "High", livery = nil }
             },
             [country.id.CJTF_RED] = {
                 { type = "Mi-8MT", skill = "High", livery = nil }
@@ -134,7 +136,7 @@ local CONFIG = {
         { type = "container_cargo", name = "Cargo Container" },
         { type = "f_bar_cargo", name = "F-Bar Cargo" },
         { type = "iso_container_small", name = "Supply Box" }
-    }
+    },
 }
 
 -- =====================================================================================
@@ -142,25 +144,25 @@ local CONFIG = {
 -- =====================================================================================
 
 local MissionState = {
-    -- Vehicle Groups 
+    -- Vehicle Groups - Now supports multiple supply groups
     vehicles = {
         truck = nil,  -- Legacy single truck reference
         helo = nil,   -- Legacy single helo reference
         supplyGroups = {}  -- New: Track multiple supply groups by zone
     },
     
-    -- Deployment Zones 
+    -- Deployment Zones
     zones = {
         srSamZones = {},  -- Short range SAM deployment zones
         lrSamZones = {},  -- Long range SAM deployment zones
         truckSpawnZones = {},  -- Multiple truck spawn zones (SUPPORT_TRUCK_DEPLOY, SUPPORT_TRUCK_DEPLOY-1, etc.)
         heloSpawnZones = {},   -- Multiple helo spawn zones (SUPPORT_HELO_DEPLOY, SUPPORT_HELO_DEPLOY-1, etc.)
-        ammoSpawnZones = {},  -- Ammo supply zone for supply cargo spawning
         truckSpawn = nil,  -- Legacy single truck spawn zone
-        heloSpawn = nil   -- Legacy single helo spawn zone
+        heloSpawn = nil,   -- Legacy single helo spawn zone
+        ammoSupplyZone = nil  -- Ammo supply zone for cargo spawning
     },
     
-    -- Mission Status
+    -- Mission Status - Now per zone
     missions = {
         truck = {
             spawnCount = CONFIG.SPAWN_LIMITS.TRUCK
@@ -172,7 +174,7 @@ local MissionState = {
         zoneStates = {}  -- Will contain per-zone mission status
     },
     
-    -- Zone Monitoring
+    -- Zone Monitoring 
     monitoring = {
         activeZones = {},  -- Zones currently being monitored
         monitoringActive = false
@@ -180,6 +182,8 @@ local MissionState = {
     
     -- Unit Tracking
     originalUnitsInZone = {},
+    
+    -- Cargo Management
     spawnedCargo = {},  -- Track currently spawned cargo objects
     cargoSpawnCount = 0, -- Counter for unique cargo naming
     
@@ -207,7 +211,7 @@ end
 
 function Utils.showDebugMessage(text, duration, level)
     level = level or 1  -- Default to level 1 if not specified
-    if CONFIG.DEBUG_MODE >= level then
+    if CONFIG.DEBUG_MODE <= level then
         duration = duration or 5
         trigger.action.outText("DEBUG L" .. level .. ": " .. text, duration)
     end
@@ -309,7 +313,7 @@ function Utils.countActiveDeployments()
         end
     end
     
-    Utils.showDebugMessage("Active deployments: " .. activeCount .. "/" .. CONFIG.ZONES.MAX_CONCURRENT_DEPLOYMENTS, 3,3)
+    Utils.showDebugMessage("Active deployments: " .. activeCount .. "/" .. CONFIG.ZONES.MAX_CONCURRENT_DEPLOYMENTS, 3)
     return activeCount
 end
 
@@ -480,6 +484,7 @@ function SAMDeployment.moveGroupToZone(group, targetZone)
         end, "Failed to set group movement task")
         
         if success then
+            Utils.showMessage("SAM group repositioned to deployment zone.", 8)
             Utils.showDebugMessage("Group movement task set successfully", 5,3)
             return true
         else
@@ -496,6 +501,7 @@ function SAMDeployment.scheduleVehicleCleanup(missionType, zoneName)
     -- Check if cleanup is enabled
     if not CONFIG.SAM.ENABLE_VEHICLE_CLEANUP then
         Utils.showDebugMessage("Vehicle cleanup disabled in configuration - vehicles will remain active", 5,3)
+        Utils.showMessage("Supply vehicles will remain in the field (cleanup disabled for crash prevention)", 8)
         return
     end
     
@@ -504,12 +510,12 @@ function SAMDeployment.scheduleVehicleCleanup(missionType, zoneName)
     Utils.showDebugMessage("Scheduling ultra-safe vehicle cleanup for " .. missionType .. " mission in zone " .. (zoneName or "unknown"), 5 ,3)
    
     timer.scheduleFunction(function()
-        Utils.showDebugMessage("Vehicle cleanup timer executed for " .. missionType .. " in zone " .. (zoneName or "unknown"), 8,3)
+        Utils.showMessage("DEBUG: Vehicle cleanup timer executed for " .. missionType .. " in zone " .. (zoneName or "unknown"), 8,3)
         
         if isHeloMission then
             -- Ultra-safe cleanup of helicopter for this specific zone only
             if zoneName and MissionState.vehicles.supplyGroups[zoneName] then
-
+                Utils.showMessage("DEBUG: Found helicopter supply group for cleanup in zone " .. zoneName, 8)
                 local supplyGroup = MissionState.vehicles.supplyGroups[zoneName]
                 if supplyGroup and supplyGroup ~= "DEPLOYMENT_PENDING" then
                     local groupName = "unknown"
@@ -520,14 +526,18 @@ function SAMDeployment.scheduleVehicleCleanup(missionType, zoneName)
                     
                     -- Use simpler and more reliable cleanup approach
                     local cleanupSuccess = pcall(function()
-                        if supplyGroup:isExist() then                          
+                        if supplyGroup:isExist() then
+                            Utils.showMessage("Cleaning up helicopter: " .. groupName .. " in zone " .. zoneName, 8)
+                            
                             -- Method 1: Try immediate destruction (simplest and most reliable)
-                            supplyGroup:destroy()  
+                            supplyGroup:destroy()
+                            
+                            Utils.showDebugMessage("Helicopter group destroyed: " .. groupName, 5)
                         end
                     end)
                     
                     if cleanupSuccess then
-                        -- Utils.showMessage("Supply helicopter '" .. groupName .. "' completed mission for zone " .. zoneName .. " and returned to base.", 8)
+                        Utils.showMessage("Supply helicopter '" .. groupName .. "' completed mission for zone " .. zoneName .. " and returned to base.", 8)
                     else
                         Utils.showDebugMessage("Failed to initiate helicopter cleanup: " .. groupName, 5)
                     end
@@ -553,6 +563,7 @@ function SAMDeployment.scheduleVehicleCleanup(missionType, zoneName)
         else
             -- Ultra-safe cleanup of truck for this specific zone only
             if zoneName and MissionState.vehicles.supplyGroups[zoneName] then
+                Utils.showMessage("DEBUG: Found truck supply group for cleanup in zone " .. zoneName, 8)
                 local supplyGroup = MissionState.vehicles.supplyGroups[zoneName]
                 if supplyGroup and supplyGroup ~= "DEPLOYMENT_PENDING" then
                     local groupName = "unknown"
@@ -564,12 +575,17 @@ function SAMDeployment.scheduleVehicleCleanup(missionType, zoneName)
                     -- Use simpler and more reliable cleanup approach
                     local cleanupSuccess = pcall(function()
                         if supplyGroup:isExist() then
+                            Utils.showMessage("Cleaning up truck: " .. groupName .. " in zone " .. zoneName, 8)
+                            
+                            -- Method 1: Try immediate destruction (simplest and most reliable)
                             supplyGroup:destroy()
+                            
+                            Utils.showDebugMessage("Truck group destroyed: " .. groupName, 5)
                         end
                     end)
                     
                     if cleanupSuccess then
-                        -- Utils.showMessage("Supply truck '" .. groupName .. "' completed mission for zone " .. zoneName .. " and withdrew.", 8)
+                        Utils.showMessage("Supply truck '" .. groupName .. "' completed mission for zone " .. zoneName .. " and withdrew.", 8)
                     else
                         Utils.showDebugMessage("Failed to initiate truck cleanup: " .. groupName, 5, 3)
                     end
@@ -607,7 +623,8 @@ end
 
 -- Discover all deployment zones with the configured prefixes
 function ZoneDiscovery.discoverDeploymentZones()
-    Utils.showDebugMessage("=== DISCOVERING DEPLOYMENT ZONES ===", 5,2)
+    Utils.showMessage("=== DISCOVERING DEPLOYMENT ZONES ===", 5)
+    Utils.showMessage("Looking for zones with prefixes: " .. CONFIG.ZONES.SR_SAM_DEPLOYMENT_PREFIX .. " and " .. CONFIG.ZONES.LR_SAM_DEPLOYMENT_PREFIX, 8)
     
     local srZones = {}
     local lrZones = {}
@@ -616,9 +633,11 @@ function ZoneDiscovery.discoverDeploymentZones()
     -- Get all trigger zones in the mission
     local env = _G.env or {}
     if env.mission and env.mission.triggers and env.mission.triggers.zones then
+        Utils.showMessage("Checking mission trigger zones...", 8)
         for _, zone in pairs(env.mission.triggers.zones) do
             if zone.name then
                 local zoneName = zone.name
+                Utils.showDebugMessage("Checking zone: " .. zoneName, 5, 2)
                 
                 -- Check for short range SAM zones
                 if string.find(zoneName, "^" .. CONFIG.ZONES.SR_SAM_DEPLOYMENT_PREFIX) then
@@ -630,7 +649,7 @@ function ZoneDiscovery.discoverDeploymentZones()
                             type = "SHORT_RANGE",
                             active = true
                         })
-                       -- Utils.showDebugMessage("Found short range SAM zone: " .. zoneName, 5)
+                        Utils.showMessage("Found short range SAM zone: " .. zoneName, 8)
                         totalZones = totalZones + 1
                     end
                 end
@@ -645,17 +664,19 @@ function ZoneDiscovery.discoverDeploymentZones()
                             type = "LONG_RANGE",
                             active = true
                         })
-                        -- Utils.showDebugMessage("Found long range SAM zone: " .. zoneName, 5)
+                        Utils.showMessage("Found long range SAM zone: " .. zoneName, 8)
                         totalZones = totalZones + 1
                     end
                 end
             end
         end
+    else
+        Utils.showMessage("No mission environment data available, trying fallback method...", 8)
     end
     
     -- Fallback: Try to get zones by name pattern (less reliable but worth trying)
     if totalZones == 0 then
-        Utils.showDebugMessage("No zones found via mission data, trying name-based discovery...", 8,2)
+        Utils.showMessage("No zones found via mission data, trying name-based discovery...", 8)
         
         -- Try common naming patterns
         for i = 0, 20 do  -- Check up to 20 numbered zones
@@ -663,6 +684,7 @@ function ZoneDiscovery.discoverDeploymentZones()
             
             -- Short range zones
             local srZoneName = CONFIG.ZONES.SR_SAM_DEPLOYMENT_PREFIX .. suffix
+            Utils.showDebugMessage("Trying to find zone: " .. srZoneName, 5, 3)
             local srZone = trigger.misc.getZone(srZoneName)
             if srZone then
                 table.insert(srZones, {
@@ -671,12 +693,13 @@ function ZoneDiscovery.discoverDeploymentZones()
                     type = "SHORT_RANGE",
                     active = true
                 })
-                Utils.showDebugMessage("Found short range SAM zone: " .. srZoneName, 5)
+                Utils.showMessage("Found short range SAM zone: " .. srZoneName, 8)
                 totalZones = totalZones + 1
             end
             
             -- Long range zones
             local lrZoneName = CONFIG.ZONES.LR_SAM_DEPLOYMENT_PREFIX .. suffix
+            Utils.showDebugMessage("Trying to find zone: " .. lrZoneName, 5, 3)
             local lrZone = trigger.misc.getZone(lrZoneName)
             if lrZone then
                 table.insert(lrZones, {
@@ -685,9 +708,35 @@ function ZoneDiscovery.discoverDeploymentZones()
                     type = "LONG_RANGE",
                     active = true
                 })
-                Utils.showDebugMessage("Found long range SAM zone: " .. lrZoneName, 5)
+                Utils.showMessage("Found long range SAM zone: " .. lrZoneName, 8)
                 totalZones = totalZones + 1
             end
+        end
+        
+        -- Also try without numbers or suffixes
+        Utils.showDebugMessage("Trying base zone names without suffixes...", 5, 2)
+        local baseShortZone = trigger.misc.getZone(CONFIG.ZONES.SR_SAM_DEPLOYMENT_PREFIX)
+        if baseShortZone then
+            table.insert(srZones, {
+                name = CONFIG.ZONES.SR_SAM_DEPLOYMENT_PREFIX,
+                zone = baseShortZone,
+                type = "SHORT_RANGE",
+                active = true
+            })
+            Utils.showMessage("Found base short range SAM zone: " .. CONFIG.ZONES.SR_SAM_DEPLOYMENT_PREFIX, 8)
+            totalZones = totalZones + 1
+        end
+        
+        local baseLongZone = trigger.misc.getZone(CONFIG.ZONES.LR_SAM_DEPLOYMENT_PREFIX)
+        if baseLongZone then
+            table.insert(lrZones, {
+                name = CONFIG.ZONES.LR_SAM_DEPLOYMENT_PREFIX,
+                zone = baseLongZone,
+                type = "LONG_RANGE",
+                active = true
+            })
+            Utils.showMessage("Found base long range SAM zone: " .. CONFIG.ZONES.LR_SAM_DEPLOYMENT_PREFIX, 8)
+            totalZones = totalZones + 1
         end
     end
     
@@ -796,6 +845,7 @@ function ZoneMonitoring.startMultiZoneMonitoring()
     end
     
     MissionState.monitoring.monitoringActive = true
+    Utils.showMessage("Started monitoring all deployment zones for enemy elimination and SAM destruction.", 8)
     
     local function monitorAllZones()
         if not MissionState.monitoring.monitoringActive then
@@ -874,7 +924,7 @@ function ZoneMonitoring.checkSingleZone(zoneInfo)
                 local supplyGroup = MissionState.vehicles.supplyGroups[zoneName]
                 if supplyGroup and supplyGroup:isExist() then
                     zoneHasSupplyMission = true
-                    Utils.showDebugMessage("Zone " .. zoneName .. " already has active supply mission", 3,3)
+                    Utils.showDebugMessage("Zone " .. zoneName .. " already has active supply mission", 3)
                 else
                     -- Clean up dead reference
                     MissionState.vehicles.supplyGroups[zoneName] = nil
@@ -885,14 +935,17 @@ function ZoneMonitoring.checkSingleZone(zoneInfo)
                 -- Check if we've reached the maximum concurrent deployments limit
                 local activeDeployments = Utils.countActiveDeployments()
                 if activeDeployments >= CONFIG.ZONES.MAX_CONCURRENT_DEPLOYMENTS then
-                    Utils.showDebugMessage("Zone " .. zoneName .. " clear but max concurrent deployments (" .. CONFIG.ZONES.MAX_CONCURRENT_DEPLOYMENTS .. ") reached. Waiting for deployment slots...", 5,3)
+                    Utils.showDebugMessage("Zone " .. zoneName .. " clear but max concurrent deployments (" .. CONFIG.ZONES.MAX_CONCURRENT_DEPLOYMENTS .. ") reached. Waiting for deployment slots...", 5)
+                    if CONFIG.DEBUG_MODE == 1 then
+                        Utils.showMessage("Zone " .. zoneName .. " waiting for deployment slot (" .. activeDeployments .. "/" .. CONFIG.ZONES.MAX_CONCURRENT_DEPLOYMENTS .. " active)", 8)
+                    end
                     return -- Skip this zone for now
                 end
                 
                 -- RACE CONDITION FIX: Reserve the deployment slot immediately
                 -- Create a placeholder to prevent other zones from spawning simultaneously
                 MissionState.vehicles.supplyGroups[zoneName] = "DEPLOYMENT_PENDING"
-                Utils.showDebugMessage("Reserved deployment slot for zone " .. zoneName, 5,2)
+                Utils.showDebugMessage("Reserved deployment slot for zone " .. zoneName, 5)
                 
                 -- Determine optimal vehicle type based on distance from deploy zones
                 local optimalVehicleType = VehicleSpawning.determineOptimalVehicleType(zone)
@@ -912,14 +965,18 @@ function ZoneMonitoring.checkSingleZone(zoneInfo)
                 -- Dispatch based on availability and preference
                 if canDispatchOptimal then
                     if optimalVehicleType == "truck" then
+                        Utils.showMessage("Zone " .. zoneName .. " clear! Dispatching supply truck (optimal for distance)...", 10)
                         VehicleSpawning.spawnTruckForZone(zoneInfo)
                     else
+                        Utils.showMessage("Zone " .. zoneName .. " clear! Dispatching supply helicopter (optimal for distance)...", 10)
                         VehicleSpawning.spawnHeloForZone(zoneInfo)
                     end
                 elseif canDispatchAlternate then
                     if optimalVehicleType == "truck" then
+                        Utils.showMessage("Zone " .. zoneName .. " clear! Truck unavailable, dispatching supply helicopter...", 10)
                         VehicleSpawning.spawnHeloForZone(zoneInfo)
                     else
+                        Utils.showMessage("Zone " .. zoneName .. " clear! Helicopter unavailable, dispatching supply truck...", 10)
                         VehicleSpawning.spawnTruckForZone(zoneInfo)
                     end
                 else
@@ -932,12 +989,12 @@ function ZoneMonitoring.checkSingleZone(zoneInfo)
     else
         -- Phase 2: Monitor for SAM destruction to enable re-deployment
         if #unitsInZone == 0 then
-            Utils.showDebugMessage("SAM site in zone " .. zoneName .. " has been destroyed! Re-deployment now available.", 10,2)
+            Utils.showMessage("SAM site in zone " .. zoneName .. " has been destroyed! Re-deployment now available.", 10)
             zoneState.samDeployed = false
             -- Reset spawn counts to enable continuous resupply
             MissionState.missions.truck.spawnCount = CONFIG.SPAWN_LIMITS.TRUCK
             MissionState.missions.helo.spawnCount = CONFIG.SPAWN_LIMITS.HELO
-            Utils.showDebugMessage("Spawn counts replenished for zone " .. zoneName .. ". Resuming monitoring for enemy elimination...", 8,2)
+            Utils.showMessage("Spawn counts replenished for zone " .. zoneName .. ". Resuming monitoring for enemy elimination...", 8)
         end
     end
 end
@@ -947,14 +1004,36 @@ function ZoneMonitoring.stopMultiZoneMonitoring()
     Utils.showMessage("Stopped multi-zone monitoring.", 5)
 end
 
+-- Legacy functions for backward compatibility
+function ZoneMonitoring.startTruckZoneMonitoring()
+    Utils.showMessage("Starting legacy truck zone monitoring - redirecting to multi-zone monitoring...", 5)
+    ZoneMonitoring.startMultiZoneMonitoring()
+end
+
+function ZoneMonitoring.startHeloZoneMonitoring()
+    Utils.showMessage("Starting legacy helo zone monitoring - redirecting to multi-zone monitoring...", 5)
+    ZoneMonitoring.startMultiZoneMonitoring()
+end
+
+function ZoneMonitoring.stopTruckZoneMonitoring()
+    Utils.showMessage("Stopping legacy truck zone monitoring - multi-zone monitoring continues...", 5)
+end
+
+function ZoneMonitoring.stopHeloZoneMonitoring()
+    Utils.showMessage("Stopping legacy helo zone monitoring - multi-zone monitoring continues...", 5)
+end
+
 -- =====================================================================================
 -- SAM DEPLOYMENT FUNCTIONS 
 -- Dependancy ZoneMonitoring
 -- =====================================================================================
 
 function SAMDeployment.spawnManually(templateName, targetZone, missionType, zoneName)
-    
     local isHeloMission = (missionType == "helicopter")
+    
+    Utils.showMessage("Creating SAM site manually at target zone " .. (zoneName or "unknown") .. "...", 8)
+    Utils.showDebugMessage("Mission type: " .. missionType, 5)
+    Utils.showDebugMessage("Zone name: " .. (zoneName or "unknown"), 5)
     
     local samUnits = {}
     
@@ -962,7 +1041,7 @@ function SAMDeployment.spawnManually(templateName, targetZone, missionType, zone
     if zoneName then
         samUnits = ZoneDiscovery.getSAMUnitsForZone(zoneName) or {}
         if #samUnits > 0 then
-            Utils.showDebugMessage("Using " .. #samUnits .. " zone-specific SAM units for " .. zoneName, 5, 2)
+            Utils.showDebugMessage("Using " .. #samUnits .. " zone-specific SAM units for " .. zoneName, 5)
         end
     end
     
@@ -1021,27 +1100,11 @@ function SAMDeployment.spawnManually(templateName, targetZone, missionType, zone
             
             Utils.showDebugMessage("Using template position for unit " .. i .. ": base offset (" .. samUnit.relativeX .. ", " .. samUnit.relativeZ .. ")", 5)
         else
-            -- Fallback to circular spacing around the first unit
-            if i == 1 then
-                -- First unit at zone center
-                unitX = targetZone.point.x
-                unitZ = targetZone.point.z
-            else
-                -- Calculate circular position for subsequent units
-                local angle = (i - 2) * (2 * math.pi / (#samUnits - 1)) -- Distribute remaining units evenly in circle
-                local radius = CONFIG.SAM.UNIT_SPACING
-                
-                -- Add some randomization to the angle for variation
-                if CONFIG.SAM.POSITION_RANDOMIZATION.ENABLED then
-                    local angleVariation = (math.random() - 0.5) * 0.5 -- ±0.25 radians (~14 degrees)
-                    angle = angle + angleVariation
-                end
-                
-                unitX = targetZone.point.x + (radius * math.cos(angle))
-                unitZ = targetZone.point.z + (radius * math.sin(angle))
-                
-                Utils.showDebugMessage("Circular position for unit " .. i .. ": angle=" .. math.deg(angle) .. "°, radius=" .. radius .. "m", 5, 3)
-            end
+            -- Fallback to linear spacing
+            unitX = targetZone.point.x + (i * CONFIG.SAM.UNIT_SPACING)
+            unitZ = targetZone.point.z + (i * CONFIG.SAM.UNIT_SPACING)
+            
+            Utils.showDebugMessage("Using linear spacing for unit " .. i, 5)
         end
         
         -- Apply randomization if enabled
@@ -1053,7 +1116,7 @@ function SAMDeployment.spawnManually(templateName, targetZone, missionType, zone
             unitX = unitX + randomX
             unitZ = unitZ + randomZ
             
-            Utils.showDebugMessage("Applied randomization: +" .. randomX .. ", +" .. randomZ, 5, 3)
+            Utils.showDebugMessage("Applied randomization: +" .. randomX .. ", +" .. randomZ, 5)
         end
         
         local unitData = {
@@ -1075,6 +1138,8 @@ function SAMDeployment.spawnManually(templateName, targetZone, missionType, zone
     end, "Failed to spawn SAM site")
     
     if success then
+        Utils.showMessage("SAM site deployed via " .. missionType .. " and is now active at zone " .. (zoneName or "unknown") .. "!", 15)
+        
         -- Update zone-specific state
         if zoneName and MissionState.missions.zoneStates[zoneName] then
             MissionState.missions.zoneStates[zoneName].samDeployed = true
@@ -1094,6 +1159,7 @@ function SAMDeployment.spawnManually(templateName, targetZone, missionType, zone
         
         -- Ensure zone monitoring continues for this zone
         if not MissionState.monitoring.monitoringActive then
+            Utils.showMessage("Starting zone monitoring for SAM destruction detection...", 8)
             ZoneMonitoring.startMultiZoneMonitoring()
         end
         
@@ -1211,7 +1277,7 @@ end
 
 -- New zone-specific spawning functions that create unique groups
 function VehicleSpawning.spawnNewTruckForZone(zoneName, uniqueGroupName, targetZone)
-    Utils.showDebugMessage("Creating new supply truck group for zone " .. zoneName .. "...", 5,2)
+    Utils.showDebugMessage("Creating new supply truck group for zone " .. zoneName .. "...", 5)
     
     -- Find the closest truck supply zone to the target
     local closestSupplyZone, distance = Utils.getClosestSupplyZone(targetZone, "truck")
@@ -1223,7 +1289,7 @@ function VehicleSpawning.spawnNewTruckForZone(zoneName, uniqueGroupName, targetZ
             x = closestSupplyZone.zone.point.x,
             z = closestSupplyZone.zone.point.z
         }
-        Utils.showDebugMessage("Using closest truck spawn zone: " .. closestSupplyZone.name .. " at (" .. spawnPoint.x .. ", " .. spawnPoint.z .. ") - " .. math.floor(distance) .. "m away", 5, 2)
+        Utils.showDebugMessage("Using closest truck spawn zone: " .. closestSupplyZone.name .. " at (" .. spawnPoint.x .. ", " .. spawnPoint.z .. ") - " .. math.floor(distance) .. "m away", 5)
     elseif MissionState.zones.truckSpawn then
         -- Fallback to legacy truck spawn zone
         spawnPoint = {
@@ -1302,7 +1368,7 @@ function VehicleSpawning.spawnNewTruckForZone(zoneName, uniqueGroupName, targetZ
             if newGroup and newGroup:isExist() then
                 local units = newGroup:getUnits()
                 if units and #units > 0 then
-                    Utils.showDebugMessage("Supply truck spawned successfully for zone " .. zoneName .. " with " .. #units .. " units!", 8,3)
+                    Utils.showMessage("Supply truck spawned successfully for zone " .. zoneName .. " with " .. #units .. " units!", 8)
                     -- Store the group reference for this zone
                     MissionState.vehicles.supplyGroups[zoneName] = newGroup
                     -- Update legacy reference for compatibility
@@ -1326,11 +1392,12 @@ end
 function VehicleSpawning.spawnNewHeloForZone(zoneName, uniqueGroupName, targetZone)
     -- Safety check: don't spawn helicopters if disabled
     if not CONFIG.VEHICLE.ENABLE_HELICOPTER_SPAWNING then
+        Utils.showMessage("Helicopter spawning disabled for crash prevention. Using truck deployment instead.", 8)
         Utils.showDebugMessage("Helicopter spawning disabled in CONFIG.VEHICLE.ENABLE_HELICOPTER_SPAWNING", 5)
         return false
     end
     
-    Utils.showDebugMessage("Creating crash-safe helicopter group for zone " .. zoneName .. "...", 5,2)
+    Utils.showDebugMessage("Creating crash-safe helicopter group for zone " .. zoneName .. "...", 5)
     
     -- Find the closest helicopter supply zone to the target
     local closestSupplyZone, distance = Utils.getClosestSupplyZone(targetZone, "helo")
@@ -1438,7 +1505,7 @@ function VehicleSpawning.spawnNewHeloForZone(zoneName, uniqueGroupName, targetZo
     -- Use safest spawning method with extensive error handling
     local success = false
     
-    Utils.showDebugMessage("Attempting to spawn validated helicopter group...", 5, 3)
+    Utils.showDebugMessage("Attempting to spawn validated helicopter group...", 5)
     
     -- Try spawning with multiple safety checks
     success = Utils.safeExecute(function()
@@ -1459,7 +1526,8 @@ function VehicleSpawning.spawnNewHeloForZone(zoneName, uniqueGroupName, targetZo
     end, "Failed to spawn helicopter group for zone " .. zoneName)
     
     if not success then
-        Utils.showDebugMessage("Failed to spawn helicopter for zone " .. zoneName, 5)
+        Utils.showMessage("Failed to spawn helicopter for zone " .. zoneName, 8)
+        Utils.showDebugMessage("Helicopter spawn completely failed", 5)
         return false
     end
     
@@ -1475,6 +1543,7 @@ function VehicleSpawning.spawnNewHeloForZone(zoneName, uniqueGroupName, targetZo
             local units = newGroup:getUnits()
             if units and #units > 0 then
                 Utils.showMessage("Supply helicopter spawned successfully for zone " .. zoneName .. " and is flying to target!", 8)
+                Utils.showDebugMessage("Helicopter " .. uniqueGroupName .. " verified and en route to zone " .. zoneName, 5)
                 -- Store the group reference for this zone
                 MissionState.vehicles.supplyGroups[zoneName] = newGroup
                 -- Update legacy reference for compatibility
@@ -1513,7 +1582,7 @@ function VehicleSpawning.spawnTruckForZone(zoneInfo)
     local zoneName = zoneInfo.name
     local targetZone = zoneInfo.zone
     
-    Utils.showDebugMessage("Attempting to spawn supply truck for zone " .. zoneName .. "...", 5, 3)
+    Utils.showDebugMessage("Attempting to spawn supply truck for zone " .. zoneName .. "...", 5)
     
     -- Mark zone as having truck mission active
     if MissionState.missions.zoneStates[zoneName] then
@@ -1533,20 +1602,19 @@ function VehicleSpawning.spawnTruckForZone(zoneInfo)
                 VehicleSpawning.setupTruckRouteToZone(targetZone, supplyGroup)
                 VehicleSpawning.startTruckPositionMonitoringForZone(zoneInfo, supplyGroup)
             else
-                Utils.showDebugMessage("Failed to setup truck route for zone " .. zoneName .. " - group not found", 5)
                 -- Release the deployment slot if spawn ultimately failed
                 if MissionState.vehicles.supplyGroups[zoneName] == "DEPLOYMENT_PENDING" then
                     MissionState.vehicles.supplyGroups[zoneName] = nil
-                    Utils.showDebugMessage("Released deployment slot for failed truck spawn in zone " .. zoneName, 5, 3)
+                    Utils.showDebugMessage("Released deployment slot for failed truck spawn in zone " .. zoneName, 5)
                 end
             end
             return nil
-        end, nil, timer.getTime() + 3)
+        end, nil, timer.getTime() + 2)
     else
         -- Release the deployment slot if spawn failed immediately
         if MissionState.vehicles.supplyGroups[zoneName] == "DEPLOYMENT_PENDING" then
             MissionState.vehicles.supplyGroups[zoneName] = nil
-            Utils.showDebugMessage("Released deployment slot for failed truck spawn in zone " .. zoneName, 5,3)
+            Utils.showDebugMessage("Released deployment slot for failed truck spawn in zone " .. zoneName, 5)
         end
     end
     
@@ -1554,10 +1622,8 @@ function VehicleSpawning.spawnTruckForZone(zoneInfo)
 end
 
 function VehicleSpawning.spawnHeloForZone(zoneInfo)
-    -- Safety check: don't spawn helicopters if disabled
-    if not CONFIG.VEHICLE.ENABLE_HELICOPTER_SPAWNING then
-        return VehicleSpawning.spawnTruckForZone(zoneInfo)
-    end
+    Utils.showMessage("DEBUG: Helicopter spawn requested for zone " .. zoneInfo.name, 8)
+    Utils.showDebugMessage("DEBUG: Helicopter spawn count available: " .. MissionState.missions.helo.spawnCount, 5)
     
     if MissionState.missions.helo.spawnCount <= 0 then
         Utils.showMessage("No more helicopter spawns available for zone " .. zoneInfo.name .. "!", 5)
@@ -1566,451 +1632,229 @@ function VehicleSpawning.spawnHeloForZone(zoneInfo)
     
     local zoneName = zoneInfo.name
     local targetZone = zoneInfo.zone
-
-    Utils.showDebugMessage("Attempting to spawn supply helicopter for zone " .. zoneName .. "...", 5,2)
+    
+    Utils.showMessage("DEBUG: Target zone for helicopter: " .. zoneName .. " at (" .. targetZone.point.x .. ", " .. targetZone.point.z .. ")", 8)
+    Utils.showDebugMessage("Attempting to spawn supply helicopter for zone " .. zoneName .. "...", 5)
     
     -- Mark zone as having helo mission active
     if MissionState.missions.zoneStates[zoneName] then
         MissionState.missions.zoneStates[zoneName].heloActive = true
+        Utils.showMessage("DEBUG: Marked zone " .. zoneName .. " as having active helicopter mission", 8)
     end
     
     -- Create unique group name for this zone
     local uniqueGroupName = "SupplyHelo_" .. zoneName .. "_" .. timer.getTime()
     
+    Utils.showMessage("DEBUG: Creating helicopter group: " .. uniqueGroupName, 8)
+    
     -- Try to spawn unique helicopter for this zone
     local success = VehicleSpawning.spawnNewHeloForZone(zoneName, uniqueGroupName, targetZone)
     if success then
+        Utils.showMessage("DEBUG: Helicopter spawn successful, starting position monitoring...", 8)
         -- Start monitoring helicopter position (no separate route setup needed)
         timer.scheduleFunction(function()
             local supplyGroup = MissionState.vehicles.supplyGroups[zoneName]
             if supplyGroup and supplyGroup ~= "DEPLOYMENT_PENDING" and supplyGroup:isExist() then
+                Utils.showMessage("DEBUG: Found helicopter group for monitoring: " .. supplyGroup:getName(), 8)
+                Utils.showDebugMessage("Starting position monitoring for helicopter " .. uniqueGroupName .. " in zone " .. zoneName, 5)
                 VehicleSpawning.startHeloPositionMonitoringForZone(zoneInfo, supplyGroup)
             else
+                Utils.showMessage("DEBUG: Failed to find helicopter group for monitoring in zone " .. zoneName, 8)
+                Utils.showDebugMessage("Failed to start helicopter monitoring for zone " .. zoneName .. " - group not found", 5)
                 -- Release the deployment slot if spawn ultimately failed
                 if MissionState.vehicles.supplyGroups[zoneName] == "DEPLOYMENT_PENDING" then
                     MissionState.vehicles.supplyGroups[zoneName] = nil
+                    Utils.showDebugMessage("Released deployment slot for failed helicopter spawn in zone " .. zoneName, 5)
                 end
             end
             return nil
         end, nil, timer.getTime() + 2)
     else
-        Utils.showDebugMessage("Helicopter spawn failed for zone " .. zoneName, 8,1)
+        Utils.showMessage("DEBUG: Helicopter spawn failed for zone " .. zoneName, 8)
         -- Release the deployment slot if spawn failed immediately
         if MissionState.vehicles.supplyGroups[zoneName] == "DEPLOYMENT_PENDING" then
             MissionState.vehicles.supplyGroups[zoneName] = nil
-            Utils.showDebugMessage("Released deployment slot for failed helicopter spawn in zone " .. zoneName, 5, 1)
+            Utils.showDebugMessage("Released deployment slot for failed helicopter spawn in zone " .. zoneName, 5)
         end
     end
     
     return success
 end
 
+-- Complete route setup and monitoring functions
 function VehicleSpawning.setupTruckRouteToZone(targetZone, supplyGroup)
-    -- Use provided group or fall back to legacy reference
-    local truckGroup = supplyGroup or MissionState.vehicles.truck
-    
-    if not truckGroup or not truckGroup:isExist() then
-        Utils.showDebugMessage("ERROR: Cannot setup truck route - truck group not found!", 10,1)
+    if not supplyGroup or not supplyGroup:isExist() then
+        Utils.showDebugMessage("Cannot setup route: invalid supply group", 5)
         return false
     end
     
-    local truckUnits = truckGroup:getUnits()
-    if not truckUnits or #truckUnits == 0 then
-        Utils.showDebugMessage("ERROR: No truck units found!", 10,1)
+    if not targetZone or not targetZone.point then
+        Utils.showDebugMessage("Cannot setup route: invalid target zone", 5)
         return false
     end
     
-    local leadUnit = truckUnits[1]
-    if not leadUnit or not leadUnit:isExist() then
-        Utils.showDebugMessage("ERROR: Lead truck unit not found!", 10,1)
-        return false
-    end
+    Utils.showDebugMessage("Setting up truck route to target zone at (" .. targetZone.point.x .. ", " .. targetZone.point.z .. ")", 5)
     
-    local currentPos = leadUnit:getPosition().p
-    if not currentPos then
-        Utils.showDebugMessage("ERROR: Could not get truck position!", 10,1)
-        return false
-    end
+    -- Get current group position
+    local groupPos = supplyGroup:getUnits()[1]:getPosition().p
     
-    -- Create route to destination
-    local routePoints = {
-        -- Starting position
-        {
-            x = currentPos.x,
-            y = currentPos.z,
-            alt = 0,
-            type = "Turning Point",
-            ETA = 0,
-            ETA_locked = false,
-            speed = CONFIG.VEHICLE.TRUCK_SPEED,
-            speed_locked = true,
-            formation_template = "",
-            task = {
-                id = "ComboTask",
-                params = { tasks = {} }
-            }
+    -- Create route with current position and target
+    local route = {
+        [1] = {
+            ["alt"] = 0,
+            ["type"] = "Turning Point",
+            ["ETA"] = 0,
+            ["alt_type"] = "BARO",
+            ["formation_template"] = "",
+            ["y"] = groupPos.z,
+            ["x"] = groupPos.x,
+            ["ETA_locked"] = false,
+            ["speed"] = CONFIG.VEHICLE.TRUCK_SPEED,
+            ["action"] = "Off Road",
+            ["task"] = {
+                ["id"] = "ComboTask",
+                ["params"] = { ["tasks"] = {} }
+            },
+            ["speed_locked"] = true,
         },
-        -- Destination
-        {
-            x = targetZone.point.x,
-            y = targetZone.point.z,
-            alt = 0,
-            type = "Turning Point",
-            ETA = 0,
-            ETA_locked = false,
-            speed = CONFIG.VEHICLE.TRUCK_SPEED,
-            speed_locked = true,
-            formation_template = "",
-            task = {
-                id = "ComboTask",
-                params = { tasks = {} }
-            }
+        [2] = {
+            ["alt"] = 0,
+            ["type"] = "Turning Point",
+            ["ETA"] = 0,
+            ["alt_type"] = "BARO",
+            ["formation_template"] = "",
+            ["y"] = targetZone.point.z,
+            ["x"] = targetZone.point.x,
+            ["ETA_locked"] = false,
+            ["speed"] = CONFIG.VEHICLE.TRUCK_SPEED,
+            ["action"] = "Off Road",
+            ["task"] = {
+                ["id"] = "ComboTask",
+                ["params"] = { ["tasks"] = {} }
+            },
+            ["speed_locked"] = true,
         }
     }
     
-    local mission = {
-        id = "Mission",
-        params = {
-            route = { points = routePoints }
-        }
-    }
-    
-    local controller = truckGroup:getController()
+    -- Apply the route to the group
+    local controller = supplyGroup:getController()
     if controller then
-        controller:setTask(mission)
-        Utils.showDebugMessage("Supply truck is en route to deployment zone!", 10,2)
+        controller:setTask({
+            id = 'Mission',
+            params = {
+                route = {
+                    points = route
+                }
+            }
+        })
+        Utils.showDebugMessage("Route successfully applied to truck group", 5)
         return true
+    else
+        Utils.showDebugMessage("Failed to get controller for truck group", 5)
+        return false
     end
-    
-    return false
 end
 
 function VehicleSpawning.startTruckPositionMonitoringForZone(zoneInfo, supplyGroup)
-    local zoneName = zoneInfo.name
-    local targetZone = zoneInfo.zone
-    -- Use provided group or fall back to legacy reference
-    local truckGroup = supplyGroup or MissionState.vehicles.truck
-    
-    local function checkTruckPosition()
-        local zoneState = MissionState.missions.zoneStates[zoneName]
-        if not zoneState or not zoneState.truckActive or zoneState.samDeployed then
-            return nil -- Stop checking
-        end
-        
-        if not truckGroup or not truckGroup:isExist() then
-            Utils.showMessage("Supply truck has been destroyed! Mission failed for zone " .. zoneName .. ".", 10)
-            if zoneState then
-                zoneState.truckActive = false
-            end
-            -- Clean up the supply group reference
-            if MissionState.vehicles.supplyGroups[zoneName] == truckGroup then
-                MissionState.vehicles.supplyGroups[zoneName] = nil
-            end
-            return nil
-        end
-        
-        local truckUnits = truckGroup:getUnits()
-        if not truckUnits or #truckUnits == 0 then
-            Utils.showMessage("No truck units remaining! Mission failed for zone " .. zoneName .. ".", 10)
-            if zoneState then
-                zoneState.truckActive = false
-            end
-            -- Clean up the supply group reference
-            if MissionState.vehicles.supplyGroups[zoneName] == truckGroup then
-                MissionState.vehicles.supplyGroups[zoneName] = nil
-            end
-            return nil
-        end
-        
-        local leadUnit = truckUnits[1]
-        if leadUnit and leadUnit:isExist() then
-            local truckPos = leadUnit:getPosition().p
-            if truckPos and Utils.isPointInZone(truckPos, targetZone) then
-                SAMDeployment.spawnManually(nil, targetZone, "truck", zoneName)
-                return nil -- Stop checking
-            end
-        end
-        
-        return timer.getTime() + CONFIG.CHECK_INTERVAL
+    if not supplyGroup or not supplyGroup:isExist() then
+        Utils.showDebugMessage("Cannot start monitoring: invalid supply group for zone " .. zoneInfo.name, 5)
+        return
     end
     
-    timer.scheduleFunction(checkTruckPosition, nil, timer.getTime() + CONFIG.CHECK_INTERVAL)
+    Utils.showDebugMessage("Starting truck position monitoring for zone " .. zoneInfo.name, 5)
+    
+    local function monitorPosition()
+        if not supplyGroup or not supplyGroup:isExist() then
+            Utils.showDebugMessage("Truck group no longer exists for zone " .. zoneInfo.name .. ", stopping monitoring", 5)
+            return nil -- Stop monitoring
+        end
+        
+        local units = supplyGroup:getUnits()
+        if not units or #units == 0 then
+            Utils.showDebugMessage("No units in truck group for zone " .. zoneInfo.name .. ", stopping monitoring", 5)
+            return nil -- Stop monitoring
+        end
+        
+        local leadUnit = units[1]
+        if not leadUnit or not leadUnit:isExist() then
+            Utils.showDebugMessage("Lead truck unit no longer exists for zone " .. zoneInfo.name .. ", stopping monitoring", 5)
+            return nil -- Stop monitoring
+        end
+        
+        local unitPos = leadUnit:getPosition().p
+        local distanceToZone = Utils.getDistance(unitPos, zoneInfo.zone.point)
+        
+        -- Check if truck reached the deployment zone
+        if distanceToZone <= zoneInfo.zone.radius then
+            Utils.showMessage("Supply truck has reached deployment zone " .. zoneInfo.name .. "!", 8)
+            Utils.showDebugMessage("Truck reached zone " .. zoneInfo.name .. " - distance: " .. math.floor(distanceToZone) .. "m", 5)
+            
+            -- Mark zone as supplied and stop monitoring
+            if MissionState.missions.zoneStates[zoneInfo.name] then
+                MissionState.missions.zoneStates[zoneInfo.name].truckActive = false
+                MissionState.missions.zoneStates[zoneInfo.name].lastSupplied = timer.getTime()
+            end
+            
+            return nil -- Stop monitoring - truck has arrived
+        end
+        
+        -- Continue monitoring every 5 seconds
+        return timer.getTime() + 5
+    end
+    
+    -- Start position monitoring
+    timer.scheduleFunction(monitorPosition, nil, timer.getTime() + 5)
 end
 
 function VehicleSpawning.startHeloPositionMonitoringForZone(zoneInfo, supplyGroup)
-    local zoneName = zoneInfo.name
-    local targetZone = zoneInfo.zone
-    -- Use provided group or fall back to legacy reference
-    local heloGroup = supplyGroup or MissionState.vehicles.helo
-    
-    Utils.showMessage("Starting helicopter position monitoring for zone " .. zoneName, 8)
-    Utils.showMessage("DEBUG: Helicopter group: " .. (heloGroup and heloGroup:getName() or "nil"), 8)
-    Utils.showMessage("DEBUG: Target zone: " .. zoneName .. " at (" .. targetZone.point.x .. ", " .. targetZone.point.z .. ") radius: " .. targetZone.radius, 8)
-    Utils.showDebugMessage("Helicopter group: " .. (heloGroup and heloGroup:getName() or "nil"), 5)
-    
-    local timeInZone = 0 -- Track how long helicopter has been in zone
-    local lastInZone = false
-    local monitoringCount = 0 -- Track how many monitoring cycles we've done
-    local lastPosition = nil -- Track previous position for velocity calculation
-    local stopCommandSent = false -- Track if we already sent stop commands
-    local approachingZone = false -- Track if helicopter is approaching the zone
-    
-    local function checkHeloPosition()
-        monitoringCount = monitoringCount + 1
-        local zoneState = MissionState.missions.zoneStates[zoneName]
-        if not zoneState or not zoneState.heloActive or zoneState.samDeployed then
-            Utils.showMessage("DEBUG: Stopping helicopter monitoring for zone " .. zoneName .. " (mission complete or inactive)", 8)
-            return nil -- Stop checking
-        end
-        
-        if not heloGroup or not heloGroup:isExist() then
-            Utils.showMessage("Supply helicopter has been destroyed! Mission failed for zone " .. zoneName .. ".", 10)
-            if zoneState then
-                zoneState.heloActive = false
-            end
-            -- Clean up the supply group reference
-            if MissionState.vehicles.supplyGroups[zoneName] == heloGroup then
-                MissionState.vehicles.supplyGroups[zoneName] = nil
-            end
-            return nil
-        end
-        
-        local heloUnits = heloGroup:getUnits()
-        if not heloUnits or #heloUnits == 0 then
-            Utils.showMessage("No helicopter units remaining! Mission failed for zone " .. zoneName .. ".", 10)
-            if zoneState then
-                zoneState.heloActive = false
-            end
-            -- Clean up the supply group reference
-            if MissionState.vehicles.supplyGroups[zoneName] == heloGroup then
-                MissionState.vehicles.supplyGroups[zoneName] = nil
-            end
-            return nil
-        end
-        
-        local leadUnit = heloUnits[1]
-        if leadUnit and leadUnit:isExist() then
-            local heloPos = leadUnit:getPosition().p
-            if heloPos then
-                local distance = Utils.getDistance(heloPos, {x = targetZone.point.x, z = targetZone.point.z})
-                local altitude = heloPos.y
-                local groundHeight = land.getHeight({x = heloPos.x, y = heloPos.z})
-                local heightAboveGround = altitude - groundHeight
-                local currentlyInZone = Utils.isPointInZone(heloPos, targetZone)
-                
-                -- Calculate velocity if we have a previous position
-                local velocity = nil
-                local eta = nil
-                if lastPosition then
-                    local deltaTime = CONFIG.HELICOPTER_CHECK_INTERVAL
-                    local deltaX = heloPos.x - lastPosition.x
-                    local deltaZ = heloPos.z - lastPosition.z
-                    local speed = math.sqrt(deltaX^2 + deltaZ^2) / deltaTime
-                    velocity = {x = deltaX / deltaTime, z = deltaZ / deltaTime, speed = speed}
-                    
-                    -- Calculate estimated time to reach zone if moving toward it
-                    if velocity.speed > 2 and distance > targetZone.radius then
-                        -- Vector from helicopter to zone center
-                        local toZoneX = targetZone.point.x - heloPos.x
-                        local toZoneZ = targetZone.point.z - heloPos.z
-                        local toZoneLength = math.sqrt(toZoneX^2 + toZoneZ^2)
-                        
-                        -- Dot product to see if helicopter is moving toward zone
-                        local dotProduct = (velocity.x * toZoneX + velocity.z * toZoneZ) / toZoneLength
-                        if dotProduct > 0 then -- Moving toward zone
-                            eta = (distance - targetZone.radius) / velocity.speed
-                        end
-                    end
-                end
-                lastPosition = {x = heloPos.x, z = heloPos.z}
-            
-
-                -- PREDICTIVE APPROACH DETECTION - Stop helicopter before it enters small zones
-                local approachDistance = math.max(targetZone.radius * 2, 200) -- Detection radius (at least 200m or 2x zone radius)
-                local nowApproaching = distance <= approachDistance and not currentlyInZone
-                
-                if nowApproaching and not approachingZone and not stopCommandSent then
-                    approachingZone = true
-                    -- Send direct route command to zone center instead of orbit command
-                    local controller = heloGroup:getController()
-                    if controller then
-                        -- Create a direct route to the zone center with slower speed
-                        local directRouteTask = {
-                            id = "Mission",
-                            params = {
-                                route = {
-                                    points = {
-                                        [1] = {
-                                            x = targetZone.point.x,
-                                            y = targetZone.point.z,
-                                            alt = math.max(groundHeight + 30, 100),
-                                            type = "Turning Point",
-                                            ETA = 0,
-                                            ETA_locked = false,
-                                            speed = 10, -- Slower approach speed (reduced from 15)
-                                            speed_locked = true,
-                                            formation_template = "",
-                                            task = {
-                                                id = "ComboTask",
-                                                params = {
-                                                    tasks = {
-                                                        [1] = {
-                                                            id = "Hold",
-                                                            params = {}
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        controller:setTask(directRouteTask)
-                        Utils.showDebugMessage("Set DIRECT APPROACH route to zone center " .. zoneName .. " (distance: " .. math.floor(distance) .. "m)", 5,3)
-                    end
-                end
-                
-                -- Enhanced debug logging every 3 monitoring cycles (roughly every 9 seconds)
-                if monitoringCount % 3 == 0 then
-                    Utils.showDebugMessage("Helicopter " .. heloGroup:getName() .. " monitoring cycle " .. monitoringCount, 8, 3)
-                    Utils.showDebugMessage("Position (" .. math.floor(heloPos.x) .. ", " .. math.floor(heloPos.z) .. "), Distance: " .. math.floor(distance) .. "m", 8,3)
-                    Utils.showDebugMessage("Currently in zone: " .. tostring(currentlyInZone) .. ", Time in zone: " .. math.floor(timeInZone) .. "s", 8,3)
-                    if velocity then
-                        Utils.showDebugMessage("Speed: " .. math.floor(velocity.speed) .. " m/s" .. (eta and (", ETA: " .. math.floor(eta) .. "s") or ""), 8,3)
-                    end
-                end
-                
-                -- Track time in zone (fixed logic)
-                if currentlyInZone then
-                    -- Helicopter is in zone - accumulate time
-                    timeInZone = timeInZone + CONFIG.HELICOPTER_CHECK_INTERVAL
-                    
-                    -- If this is the first time entering the zone, IMMEDIATELY stop the helicopter
-                    if not lastInZone then
-                        stopCommandSent = true
-                        
-                        -- Force helicopter to STOP immediately in the zone (multiple methods for reliability)
-                        local controller = heloGroup:getController()
-                        if controller then
-                            -- Method 1: Immediate HOLD command (replaces all tasks)
-                            local holdTask = {
-                                id = "Hold",
-                                params = {}
-                            }
-                            controller:setTask(holdTask)
-                            Utils.showDebugMessage("Set HOLD task - helicopter should stop immediately in zone " .. zoneName, 5,3)
-                            
-                            -- Method 2: Follow up with Land task to force full stop
-                            timer.scheduleFunction(function()
-                                if heloGroup and heloGroup:isExist() then
-                                    local controller2 = heloGroup:getController()
-                                    if controller2 then
-                                        local landTask = {
-                                            id = "Land",
-                                            params = {
-                                                point = {
-                                                    x = heloPos.x,
-                                                    y = heloPos.z
-                                                },
-                                                durationFlag = false,
-                                                duration = 300  -- Land for 5 minutes (effectively permanent)
-                                            }
-                                        }
-                                        controller2:setTask(landTask)
-                                        Utils.showDebugMessage("Set LAND task - helicopter should land and stay in zone " .. zoneName, 5, 3)
-                                    end
-                                end
-                                return nil
-                            end, nil, timer.getTime() + 1)
-                            
-                            -- Method 3: Backup orbit at current position with minimal speed
-                            timer.scheduleFunction(function()
-                                if heloGroup and heloGroup:isExist() then
-                                    local controller3 = heloGroup:getController()
-                                    if controller3 then
-                                        local hoverTask = {
-                                            id = "Orbit",
-                                            params = {
-                                                pattern = "Circle",
-                                                point = {
-                                                    x = heloPos.x,
-                                                    y = heloPos.z
-                                                },
-                                                speed = 5, -- Very slow speed for hovering
-                                                altitude = math.max(groundHeight + 10, altitude - 10) -- Lower altitude
-                                            }
-                                        }
-                                        controller3:setTask(hoverTask)
-                                        Utils.showDebugMessage("Set BACKUP HOVER task with minimal speed", 5,3)
-                                    end
-                                end
-                                return nil
-                            end, nil, timer.getTime() + 5)
-                        end
-                    end
-                else
-                    -- Helicopter left zone - reset timer and flags
-                    if lastInZone then
-                        Utils.showMessage("Helicopter left zone " .. zoneName .. " - resetting deployment timer", 8)
-                        stopCommandSent = false -- Allow stop commands again if it re-enters
-                    end
-                    timeInZone = 0
-                    approachingZone = false
-                end
-                lastInZone = currentlyInZone
-                
-                Utils.showDebugMessage("Helicopter distance to zone " .. zoneName .. ": " .. math.floor(distance) .. "m, AGL: " .. math.floor(heightAboveGround) .. "m, Time in zone: " .. math.floor(timeInZone) .. "s", 3,3)
-                
-                -- Deploy SAM based on more forgiving conditions (faster deployment)
-                if currentlyInZone and (heightAboveGround < 80 or timeInZone >= 10) then
-                    local deployReason = ""
-                    if heightAboveGround < 80 then
-                        deployReason = "reasonable altitude (" .. math.floor(heightAboveGround) .. "m AGL)"
-                    else
-                        deployReason = "10-second timeout in zone"
-                    end
-                    
-                    Utils.showDebugMessage("Supply helicopter deploying SAM in zone " .. zoneName .. " due to " .. deployReason .. "!", 10, 2)
-                    
-                    -- Schedule SAM deployment
-                    timer.scheduleFunction(function()
-                        SAMDeployment.spawnManually(nil, targetZone, "helicopter", zoneName)
-                    end, nil, timer.getTime() + 1)
-                    
-                    return nil -- Stop checking
-                elseif currentlyInZone then
-                    -- Helicopter is in zone but waiting for deployment conditions
-                    Utils.showDebugMessage("Helicopter in zone " .. zoneName .. " - AGL: " .. math.floor(heightAboveGround) .. "m, Time: " .. math.floor(timeInZone) .. "s (deployment pending)", 5, 3)
-                    
-                    -- Force descent and full stop if helicopter has been in zone for a while
-                    if timeInZone > 6 and heightAboveGround > 40 then
-                        local controller = heloGroup:getController()
-                        if controller then
-                            -- Try both Land and low Orbit tasks for maximum effect
-                            local landTask = {
-                                id = "Land",
-                                params = {
-                                    point = {
-                                        x = targetZone.point.x,
-                                        y = targetZone.point.z
-                                    },
-                                    durationFlag = false,
-                                    duration = 300
-                                }
-                            }
-                            controller:setTask(landTask)
-                            Utils.showDebugMessage("Forcing helicopter to LAND in zone " .. zoneName .. " after 6 seconds", 5)
-                        end
-                    end
-                end
-            end
-        end
-        
-        return timer.getTime() + CONFIG.HELICOPTER_CHECK_INTERVAL
+    if not supplyGroup or not supplyGroup:isExist() then
+        Utils.showDebugMessage("Cannot start monitoring: invalid supply group for zone " .. zoneInfo.name, 5)
+        return
     end
     
-    timer.scheduleFunction(checkHeloPosition, nil, timer.getTime() + CONFIG.HELICOPTER_CHECK_INTERVAL)
+    Utils.showDebugMessage("Starting helicopter position monitoring for zone " .. zoneInfo.name, 5)
+    
+    local function monitorPosition()
+        if not supplyGroup or not supplyGroup:isExist() then
+            Utils.showDebugMessage("Helicopter group no longer exists for zone " .. zoneInfo.name .. ", stopping monitoring", 5)
+            return nil -- Stop monitoring
+        end
+        
+        local units = supplyGroup:getUnits()
+        if not units or #units == 0 then
+            Utils.showDebugMessage("No units in helicopter group for zone " .. zoneInfo.name .. ", stopping monitoring", 5)
+            return nil -- Stop monitoring
+        end
+        
+        local leadUnit = units[1]
+        if not leadUnit or not leadUnit:isExist() then
+            Utils.showDebugMessage("Lead helicopter unit no longer exists for zone " .. zoneInfo.name .. ", stopping monitoring", 5)
+            return nil -- Stop monitoring
+        end
+        
+        local unitPos = leadUnit:getPosition().p
+        local distanceToZone = Utils.getDistance(unitPos, zoneInfo.zone.point)
+        
+        -- Check if helicopter reached the deployment zone
+        if distanceToZone <= zoneInfo.zone.radius + 100 then -- Extra margin for helicopters
+            Utils.showMessage("Supply helicopter has reached deployment zone " .. zoneInfo.name .. "!", 8)
+            Utils.showDebugMessage("Helicopter reached zone " .. zoneInfo.name .. " - distance: " .. math.floor(distanceToZone) .. "m", 5)
+            
+            -- Mark zone as supplied and stop monitoring
+            if MissionState.missions.zoneStates[zoneInfo.name] then
+                MissionState.missions.zoneStates[zoneInfo.name].heloActive = false
+                MissionState.missions.zoneStates[zoneInfo.name].lastSupplied = timer.getTime()
+            end
+            
+            return nil -- Stop monitoring - helicopter has arrived
+        end
+        
+        -- Continue monitoring every 5 seconds
+        return timer.getTime() + 5
+    end
+    
+    -- Start position monitoring
+    timer.scheduleFunction(monitorPosition, nil, timer.getTime() + 5)
 end
 
 -- =====================================================================================
@@ -2019,14 +1863,17 @@ end
 
 -- Initialize the cargo management system and spawn initial supply objects
 function CargoManagement.initialize()
-    Utils.showDebugMessage("=== INITIALIZING CARGO MANAGEMENT SYSTEM ===", 5, 2)
+    Utils.showMessage("=== INITIALIZING CARGO MANAGEMENT SYSTEM ===", 5)
     
-    -- Discover and load the ammo supply zones
-    MissionState.zones.ammoSpawnZones = Utils.getZoneByName(CONFIG.ZONES.SUPPORT_AMMO_SUPPLY)
-    if not MissionState.zones.ammoSpawnZones then
-        Utils.showDebugMessage("WARNING: Ammo Spawn zone '" .. CONFIG.ZONES.SUPPORT_AMMO_SUPPLY .. "' not found! Cargo spawning disabled.", 10, 1)
+    -- Discover and load the ammo supply zone
+    MissionState.zones.ammoSupplyZone = Utils.getZoneByName(CONFIG.ZONES.SUPPORT_AMMO_SUPPLY)
+    if not MissionState.zones.ammoSupplyZone then
+        Utils.showMessage("WARNING: Ammo supply zone '" .. CONFIG.ZONES.SUPPORT_AMMO_SUPPLY .. "' not found! Cargo spawning disabled.", 10)
         return false
     end
+    
+    Utils.showMessage("Ammo supply zone loaded successfully: " .. CONFIG.ZONES.SUPPORT_AMMO_SUPPLY, 5)
+    Utils.showDebugMessage("Ammo supply zone center: (" .. MissionState.zones.ammoSupplyZone.point.x .. ", " .. MissionState.zones.ammoSupplyZone.point.z .. "), radius: " .. MissionState.zones.ammoSupplyZone.radius .. "m", 5, 2)
     
     -- Spawn initial supply objects
     CargoManagement.spawnInitialSupplyObjects()
@@ -2036,18 +1883,18 @@ end
 
 -- Spawn the initial supply objects in the ammo supply zone
 function CargoManagement.spawnInitialSupplyObjects()
-    if not MissionState.zones.ammoSpawnZones then
+    if not MissionState.zones.ammoSupplyZone then
         Utils.showDebugMessage("Cannot spawn initial supply objects - ammo supply zone not available", 5)
         return false
     end
     
     if not CONFIG.AVAILABLE_SUPPLY_OBJECT_TYPES or #CONFIG.AVAILABLE_SUPPLY_OBJECT_TYPES == 0 then
-        Utils.showDebugMessage("ERROR: No supply object types configured in AVAILABLE_SUPPLY_OBJECT_TYPES!", 10)
+        Utils.showMessage("ERROR: No supply object types configured in AVAILABLE_SUPPLY_OBJECT_TYPES!", 10)
         return false
     end
     
     local objectsToSpawn = CONFIG.STARTING_SUPPLY_OBJECTS or 10
-    Utils.showDebugMessage("Spawning " .. objectsToSpawn .. " initial supply objects in " .. CONFIG.ZONES.SUPPORT_AMMO_SUPPLY .. "...", 8,1)
+    Utils.showMessage("Spawning " .. objectsToSpawn .. " initial supply objects in " .. CONFIG.ZONES.SUPPORT_AMMO_SUPPLY .. "...", 8)
     
     local successCount = 0
     local failureCount = 0
@@ -2068,7 +1915,7 @@ function CargoManagement.spawnInitialSupplyObjects()
         end
     end
     
-    Utils.showDebugMessage("Initial supply spawn completed: " .. successCount .. " objects spawned successfully, " .. failureCount .. " failed", 10)
+    Utils.showMessage("Initial supply spawn completed: " .. successCount .. " objects spawned successfully, " .. failureCount .. " failed", 10)
     Utils.showDebugMessage("Current cargo count: " .. #MissionState.spawnedCargo, 5, 2)
     
     return successCount > 0
@@ -2076,7 +1923,7 @@ end
 
 -- Spawn a random supply object in the ammo supply zone
 function CargoManagement.spawnRandomSupplyObject()
-    if not MissionState.zones.ammoSpawnZones then
+    if not MissionState.zones.ammoSupplyZone then
         Utils.showDebugMessage("Cannot spawn supply object - ammo supply zone not available", 5, 3)
         return false
     end
@@ -2086,10 +1933,12 @@ function CargoManagement.spawnRandomSupplyObject()
     local randomIndex = math.random(1, #objectTypes)
     local selectedType = objectTypes[randomIndex]
     
-    -- Generate position within the specified zone
-    local spawnPos = CargoManagement.getRandomPositionInZone(MissionState.zones.ammoSpawnZones)
+    Utils.showDebugMessage("Selected random supply type: " .. selectedType.name .. " (" .. selectedType.type .. ")", 5, 3)
+    
+    -- Generate random position within the zone
+    local spawnPos = CargoManagement.getRandomPositionInZone(MissionState.zones.ammoSupplyZone)
     if not spawnPos then
-        Utils.showDebugMessage("Failed to generate position in target zone", 5)
+        Utils.showDebugMessage("Failed to generate random position in ammo supply zone", 5)
         return false
     end
     
@@ -2186,373 +2035,70 @@ function CargoManagement.getRandomPositionInZone(zone)
     }
 end
 
--- =====================================================================================
--- RADIO MENU SYSTEM
--- =====================================================================================
-
-function RadioMenu.checkTruckStatus()
-    if not MissionState.vehicles.truck or not MissionState.vehicles.truck:isExist() then
-        Utils.showMessage("Supply truck is not available.", 5)
-        return
-    end
+-- Clean up destroyed or missing cargo objects from tracking
+function CargoManagement.cleanupMissingCargo()
+    local initialCount = #MissionState.spawnedCargo
+    local newCargoList = {}
     
-    local truckUnits = MissionState.vehicles.truck:getUnits()
-    if not truckUnits or #truckUnits == 0 then
-        Utils.showMessage("No truck units remaining.", 5)
-        return
-    end
-    
-    local leadUnit = truckUnits[1]
-    if leadUnit and leadUnit:isExist() then
-        local truckPos = leadUnit:getPosition().p
-        if truckPos and MissionState.zones.truck then
-            local distance = Utils.getDistance(truckPos, MissionState.zones.truck.point)
-            Utils.showMessage(string.format("Supply truck is %.0f meters from truck deployment zone.", distance), 8)
+    for _, cargo in pairs(MissionState.spawnedCargo) do
+        -- Try to find the static object
+        local staticObj = StaticObject.getByName(cargo.name)
+        if staticObj and staticObj:isExist() then
+            table.insert(newCargoList, cargo)
         else
-            Utils.showMessage("Could not get truck position or zone not found.", 5)
-        end
-    else
-        Utils.showMessage("Supply truck status unknown.", 5)
-    end
-end
-
-function RadioMenu.checkHeloStatus()
-    if not MissionState.vehicles.helo or not MissionState.vehicles.helo:isExist() then
-        Utils.showMessage("Supply helicopter is not available.", 5)
-        return
-    end
-    
-    local heloUnits = MissionState.vehicles.helo:getUnits()
-    if not heloUnits or #heloUnits == 0 then
-        Utils.showMessage("No helicopter units remaining.", 5)
-        return
-    end
-    
-    local leadUnit = heloUnits[1]
-    if leadUnit and leadUnit:isExist() then
-        local heloPos = leadUnit:getPosition().p
-        if heloPos and MissionState.zones.helo then
-            local distance = Utils.getDistance(heloPos, MissionState.zones.helo.point)
-            Utils.showMessage(string.format("Supply helicopter is %.0f meters from helicopter deployment zone.", distance), 8)
-        else
-            Utils.showMessage("Could not get helicopter position or zone not found.", 5)
-        end
-    else
-        Utils.showMessage("Supply helicopter status unknown.", 5)
-    end
-end
-
--- Obsolete manual start functions removed - system now operates automatically via zone monitoring
--- Use "Start Zone Monitoring" from the radio menu to enable automatic multi-zone resupply
-
-function RadioMenu.getMissionStatus()
-    local overview = Utils.getMissionOverview()
-    local allZones = ZoneDiscovery.getAllActiveZones()
-    
-    local message = string.format(
-        "MISSION STATUS:\nTruck Spawns: %d | Helo Spawns: %d\n\nDEPLOYMENT ZONES:",
-        overview.truck.spawnsRemaining,
-        overview.helo.spawnsRemaining
-    )
-    
-    if #allZones > 0 then
-        for _, zoneInfo in pairs(allZones) do
-            local zoneName = zoneInfo.name
-            local zoneType = zoneInfo.type
-            local zoneState = MissionState.missions.zoneStates[zoneName]
-            
-            if zoneState then
-                local status = "CLEAR"
-                if zoneState.samDeployed then
-                    status = "SAM ACTIVE"
-                elseif zoneState.unitsCount > 0 then
-                   
-                    status = "ENEMIES (" .. zoneState.unitsCount .. ")"
-                elseif zoneState.truckActive or zoneState.heloActive then
-                    status = "RESUPPLY EN ROUTE"
-                end
-                
-                message = message .. string.format("\n%s (%s): %s", zoneName, zoneType, status)
-            end
-        end
-    else
-        message = message .. "\nNo deployment zones found!"
-    end
-    
-    Utils.showMessage(message, 15)
-end
-
-function RadioMenu.resetSpawnCounts()
-    MissionState.missions.truck.spawnCount = CONFIG.SPAWN_LIMITS.TRUCK
-    MissionState.missions.helo.spawnCount = CONFIG.SPAWN_LIMITS.HELO
-    Utils.showMessage("Spawn counts reset to maximum values.", 8)
-end
-
-function RadioMenu.resetMissions()
-    -- Reset mission states
-    MissionState.missions.truck.spawnCount = CONFIG.SPAWN_LIMITS.TRUCK
-    MissionState.missions.helo.spawnCount = CONFIG.SPAWN_LIMITS.HELO
-    
-    -- Reset all zone states
-    for zoneName, zoneState in pairs(MissionState.missions.zoneStates) do
-        zoneState.truckActive = false
-        zoneState.heloActive = false
-        zoneState.samDeployed = false
-        zoneState.unitsCount = 0
-    end
-    
-    -- Stop monitoring
-    MissionState.monitoring.monitoringActive = false
-    
-    Utils.showMessage("All missions and spawn counts reset. Ready for fresh start.", 10)
-    
-    -- Restart monitoring
-    timer.scheduleFunction(function()
-        ZoneMonitoring.startMultiZoneMonitoring()
-        return nil
-    end, nil, timer.getTime() + 2)
-end
-
--- Manual cleanup function for testing
-function RadioMenu.manualCleanupVehicles()
-    Utils.showMessage("=== MANUAL VEHICLE CLEANUP ===", 5)
-    
-    local cleanedCount = 0
-    
-    -- Clean up all tracked supply groups
-    for zoneName, supplyGroup in pairs(MissionState.vehicles.supplyGroups) do
-        if supplyGroup and supplyGroup ~= "DEPLOYMENT_PENDING" then
-            if supplyGroup:isExist() then
-                local groupName = supplyGroup:getName()
-                Utils.showMessage("Manually cleaning up supply group: " .. groupName .. " in zone " .. zoneName, 8)
-                
-                -- Simple immediate cleanup
-                local success = pcall(function()
-                    supplyGroup:destroy()
-                end)
-                
-                if success then
-                    Utils.showMessage("Successfully destroyed supply group: " .. groupName, 8)
-                    cleanedCount = cleanedCount + 1
-                else
-                    Utils.showMessage("Failed to destroy supply group: " .. groupName, 8)
-                end
-                
-                -- Remove from tracking
-                MissionState.vehicles.supplyGroups[zoneName] = nil
-            else
-                Utils.showMessage("Supply group in zone " .. zoneName .. " no longer exists, removing from tracking", 8)
-                MissionState.vehicles.supplyGroups[zoneName] = nil
-                cleanedCount = cleanedCount + 1
-            end
+            Utils.showDebugMessage("Removed missing cargo from tracking: " .. cargo.name, 5, 3)
         end
     end
     
-    Utils.showMessage("Manual cleanup complete. Cleaned " .. cleanedCount .. " supply groups.", 10)
+    MissionState.spawnedCargo = newCargoList
+    local removedCount = initialCount - #newCargoList
+    
+    if removedCount > 0 then
+        Utils.showDebugMessage("Cargo cleanup: removed " .. removedCount .. " missing objects, " .. #newCargoList .. " remain", 5, 2)
+    end
+    
+    return removedCount
 end
 
-function RadioMenu.checkZoneStatus()
-    local allZones = ZoneDiscovery.getAllActiveZones()
-    local message = "DETAILED ZONE STATUS:\n"
+-- Get current cargo status for reporting
+function CargoManagement.getCargoStatus()
+    CargoManagement.cleanupMissingCargo()
     
-    if #allZones > 0 then
-        for _, zoneInfo in pairs(allZones) do
-            local zoneName = zoneInfo.name
-            local zoneType = zoneInfo.type
-            local zoneState = MissionState.missions.zoneStates[zoneName]
-            
-            message = message .. string.format("\n=== %s (%s) ===", zoneName, zoneType)
-            
-            if zoneState then
-                message = message .. string.format("\nUnits in Zone: %d", zoneState.unitsCount)
-                message = message .. string.format("\nSAM Deployed: %s", zoneState.samDeployed and "YES" or "NO")
-                message = message .. string.format("\nTruck Active: %s", zoneState.truckActive and "YES" or "NO")
-                message = message .. string.format("\nHelo Active: %s", zoneState.heloActive and "YES" or "NO")
-            else
-                message = message .. "\nStatus: UNKNOWN"
-            end
-        end
-        
-        message = message .. string.format("\n\nSPAWN COUNTS:\nTruck: %d | Helo: %d", 
-                                          MissionState.missions.truck.spawnCount,
-                                          MissionState.missions.helo.spawnCount)
-    else
-        message = message .. "No deployment zones found!"
-
+    local cargoCount = #MissionState.spawnedCargo
+    local typeBreakdown = {}
+    
+    for _, cargo in pairs(MissionState.spawnedCargo) do
+        local typeName = cargo.typeName or cargo.type
+        typeBreakdown[typeName] = (typeBreakdown[typeName] or 0) + 1
     end
     
-    -- Check spawn zones
-    message = message .. "\n\nSPAWN ZONES:"
-    if MissionState.zones.truckSpawn then
-        message = message .. "\n✓ Truck Spawn Zone: LOADED"
-    else
-        message = message .. "\n✗ Truck Spawn Zone: MISSING (will use fallback)"
-    end
-    
-    if MissionState.zones.heloSpawn then
-        message = message .. "\n✓ Helicopter Spawn Zone: LOADED"
-    else
-        message = message .. "\n✗ Helicopter Spawn Zone: MISSING (will use fallback)"
-    end
-    
-    Utils.showMessage(message, 15)
+    return {
+        totalCount = cargoCount,
+        typeBreakdown = typeBreakdown,
+        zone = CONFIG.ZONES.SUPPORT_AMMO_SUPPLY
+    }
 end
 
-function RadioMenu.initialize()    
-    -- Create main menu
-    local mainMenu = missionCommands.addSubMenu("Auto-Resupply System")
+-- Manually spawn additional supply objects (for radio commands or events)
+function CargoManagement.spawnAdditionalSupplies(count)
+    count = count or 1
+    Utils.showMessage("Spawning " .. count .. " additional supply objects...", 5)
     
-    -- Add commands for both coalitions
-    for _, coalitionSide in pairs({coalition.side.RED, coalition.side.BLUE}) do
-        missionCommands.addCommandForCoalition(coalitionSide, "Mission Status", mainMenu, RadioMenu.getMissionStatus)
-        missionCommands.addCommandForCoalition(coalitionSide, "Check Zone Status", mainMenu, RadioMenu.checkZoneStatus)
-        missionCommands.addCommandForCoalition(coalitionSide, "Check Truck Status", mainMenu, RadioMenu.checkTruckStatus)
-        missionCommands.addCommandForCoalition(coalitionSide, "Check Helicopter Status", mainMenu, RadioMenu.checkHeloStatus)
-        missionCommands.addCommandForCoalition(coalitionSide, "Start Zone Monitoring", mainMenu, ZoneMonitoring.startMultiZoneMonitoring)
-        missionCommands.addCommandForCoalition(coalitionSide, "Stop Zone Monitoring", mainMenu, ZoneMonitoring.stopMultiZoneMonitoring)
-        missionCommands.addCommandForCoalition(coalitionSide, "Manual Vehicle Cleanup", mainMenu, RadioMenu.manualCleanupVehicles)
-        missionCommands.addCommandForCoalition(coalitionSide, "Reset Spawn Counts", mainMenu, RadioMenu.resetSpawnCounts)
-        missionCommands.addCommandForCoalition(coalitionSide, "Reset All Missions", mainMenu, RadioMenu.resetMissions)
-    end
-    
-end
-
--- =====================================================================================
--- EVENT HANDLING
--- =====================================================================================
-
-local EventHandler = {}
-
-function EventHandler.onEvent(event)
-    if event.id == world.event.S_EVENT_UNIT_LOST then
-        if event.initiator then
-            local lostUnit = event.initiator
-            
-            -- Safely get the group
-            local success, lostGroup = Utils.safeExecute(function()
-                return lostUnit:getGroup()
-            end, "Failed to get group for lost unit")
-            
-            if success and lostGroup then
-                local groupName = lostGroup:getName()
-                
-                -- Check if lost unit belongs to our supply vehicles (using dynamic naming pattern)
-                if string.find(groupName, "SupplyTruck_") then
-                    Utils.showMessage("Supply truck unit lost!", 8)
-                    -- Could implement respawn logic here
-                elseif string.find(groupName, "SupplyHelo_") then
-                    Utils.showMessage("Supply helicopter unit lost!", 8)
-                    -- Could implement respawn logic here
-                end
-            end
+    local successCount = 0
+    for i = 1, count do
+        if CargoManagement.spawnRandomSupplyObject() then
+            successCount = successCount + 1
         end
     end
-end
-
-function EventHandler.initialize()
-    world.addEventHandler(EventHandler)
-end
-
--- =====================================================================================
--- MISSION INITIALIZATION
--- =====================================================================================
-
-local function initializeSupplyMission()
-    Utils.showMessage("=== INITIALIZING AUTO-RESUPPLY SYSTEM ===", 5)
     
-    -- Discover all deployment zones
-    if not ZoneDiscovery.discoverDeploymentZones() then
-        Utils.showMessage("ERROR: Failed to discover deployment zones!", 10)
-        return false
-    end
-    
-    -- Discover all supply zones (truck and helicopter spawn zones)
-    if not Utils.discoverSupplyZones() then
-        Utils.showMessage("WARNING: No supply zones found! Will use legacy zone configuration.", 8)
-    end
-    
-    -- Initialize legacy spawn zones for backward compatibility
-    MissionState.zones.truckSpawn = Utils.getZoneByName(CONFIG.ZONES.SUPPORT_TRUCK_DEPLOY)
-    if not MissionState.zones.truckSpawn then
-        Utils.showMessage("WARNING: Legacy truck spawn zone '" .. CONFIG.ZONES.SUPPORT_TRUCK_DEPLOY .. "' not found! Will use multi-zone system only.", 8)
-    end
-    
-    MissionState.zones.heloSpawn = Utils.getZoneByName(CONFIG.ZONES.SUPPORT_HELO_DEPLOY)
-    if not MissionState.zones.heloSpawn then
-        Utils.showMessage("WARNING: Legacy helicopter spawn zone '" .. CONFIG.ZONES.SUPPORT_HELO_DEPLOY .. "' not found! Will use multi-zone system only.", 8)
-    end
-    
-    -- Initialize subsystems
-    EventHandler.initialize()
-    RadioMenu.initialize()
-    CargoManagement.initialize()
-    
-    -- Display distance-based deployment configuration
-    Utils.showMessage("Distance-based vehicle selection: Trucks for targets within " .. CONFIG.ZONES.MAX_DISTANCE_FROM_DEPLOY .. "m, helicopters for longer distances.", 8)
-    
-    -- Display concurrent deployment limit
-    Utils.showMessage("Maximum concurrent deployments: " .. CONFIG.ZONES.MAX_CONCURRENT_DEPLOYMENTS, 8)
-    
-    -- Perform initial zone analysis
-    
-    local allGroups = Utils.getGroundGroupsSafe()
-    local allZones = ZoneDiscovery.getAllActiveZones()
-    
-    if #allZones > 0 then
-        for _, zoneInfo in pairs(allZones) do
-            local zoneName = zoneInfo.name
-            local zone = zoneInfo.zone
-            local unitsCount = 0
-            
-            for _, group in pairs(allGroups) do
-                if group and group:isExist() then
-                    local groupName = group:getName()
-                    -- Skip supply vehicles (using dynamic naming pattern)
-                    if not string.find(groupName, "SupplyTruck_") and not string.find(groupName, "SupplyHelo_") then
-                        local success, units = pcall(group.getUnits, group)
-                        if success and units then
-                            for _, unit in pairs(units) do
-                                if unit and unit:isExist() then
-                                    local success2, unitPos = pcall(function() return unit:getPosition().p end)
-                                    if success2 and unitPos and Utils.isPointInZone(unitPos, zone) then
-                                        unitsCount = unitsCount + 1
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-            
-            Utils.showDebugMessage("Zone " .. zoneName .. " (" .. zoneInfo.type .. ") has " .. unitsCount .. " RED ground units at mission start", 8, 3 )
-            
-            -- Update zone state
-            if MissionState.missions.zoneStates[zoneName] then
-                MissionState.missions.zoneStates[zoneName].unitsCount = unitsCount
-            end
-        end
-    else
-        Utils.showMessage("No deployment zones discovered for monitoring!", 8)
-    end
-        
-    -- Start zone monitoring with delay to prevent initialization race conditions
-    timer.scheduleFunction(function()
-        ZoneMonitoring.startMultiZoneMonitoring()
-        Utils.showMessage("Zone monitoring started successfully!", 8)
-        return nil
-    end, nil, timer.getTime() + 10) -- 10 second delay to allow DCS to stabilize
-    
-    MissionState.initialized = true
-    Utils.showMessage("System will automatically dispatch vehicles when zones are cleared.", 8)
-    
-    return true
+    Utils.showMessage("Spawned " .. successCount .. " of " .. count .. " additional supply objects", 8)
+    return successCount
 end
 
 -- Discover all supply zones (truck and helicopter spawn zones)
 function Utils.discoverSupplyZones()
     local truckZones = {}
     local heloZones = {}
-    local ammoZones = {}
     
     Utils.showDebugMessage("Discovering supply zones...", 5, 2)
     
@@ -2586,24 +2132,12 @@ function Utils.discoverSupplyZones()
                         Utils.showDebugMessage("Found helo spawn zone: " .. zoneName, 5, 2)
                     end
                 end
-
-                -- Check for ammo supply zones
-                if string.find(zoneName, "^" .. CONFIG.ZONES.SUPPORT_AMMO_SUPPLY) then
-                    local zoneObj = trigger.misc.getZone(zoneName)
-                    if zoneObj then
-                        table.insert(ammoZones, {
-                            name = zoneName,
-                            zone = zoneObj
-                        })
-                        Utils.showDebugMessage("Found ammo supply zone: " .. zoneName, 5, 2)
-                    end
-                end
             end
         end
     end
     
     -- Fallback: Try to get zones by name pattern
-    if #truckZones == 0 and #heloZones == 0 and #ammoZones == 0 then
+    if #truckZones == 0 and #heloZones == 0 then
         Utils.showDebugMessage("No supply zones found via mission data, trying name-based discovery...", 5, 2)
         
         -- Try common naming patterns for truck zones
@@ -2631,50 +2165,18 @@ function Utils.discoverSupplyZones()
                 })
                 Utils.showDebugMessage("Found helo spawn zone: " .. heloZoneName, 5, 2)
             end
-
-            -- ammoZones zones
-            local ammoZoneName = CONFIG.ZONES.SUPPORT_AMMO_SUPPLY .. suffix
-            local ammoZone = trigger.misc.getZone(ammoZoneName)
-            if ammoZone then
-                table.insert(ammoZone, {
-                    name = ammoZoneName,
-                    zone = ammoZone
-                })
-                Utils.showDebugMessage("Found ammo spawn zone: " .. ammoZoneName, 5, 2)
-            end
         end
     end
     
-    -- Store discovered zones
-    MissionState.zones.truckSpawnZones = truckZones
-    MissionState.zones.heloSpawnZones = heloZones
-    MissionState.zones.ammoSpawnZones = ammoZones
+    -- Store discovered zones in MissionState (already done above)
     
     Utils.showMessage("Discovered " .. #truckZones .. " truck spawn zones and " .. #heloZones .. " helo spawn zones", 8)
     
-    -- Set legacy references if base zones exist
-    for _, zoneInfo in pairs(truckZones) do
-        if zoneInfo.name == CONFIG.ZONES.SUPPORT_TRUCK_DEPLOY then
-            MissionState.zones.truckSpawn = zoneInfo.zone
-            break
-        end
-    end
-    
-    for _, zoneInfo in pairs(heloZones) do
-        if zoneInfo.name == CONFIG.ZONES.SUPPORT_HELO_DEPLOY then
-            MissionState.zones.heloSpawn = zoneInfo.zone
-            break
-        end
-    end
-
-    for _, zoneInfo in pairs(ammoZones) do
-        if zoneInfo.name == CONFIG.ZONES.SUPPORT_AMMO_SUPPLY then
-            MissionState.zones.ammoSpawnZone = zoneInfo.zone
-            break
-        end
-    end
-    
-    return #truckZones > 0 or #heloZones > 0 or #ammoZones > 0
+    -- Return the discovered zones in the expected format
+    return {
+        truck = truckZones,
+        helo = heloZones
+    }
 end
 
 -- Find the closest supply zone of specified type to a target zone
@@ -2727,12 +2229,85 @@ function Utils.getClosestSupplyZone(targetZone, vehicleType)
     return closestZone, shortestDistance
 end
 
+-- Get count of active deployment zones for status reporting
+function Utils.getActiveZoneCount()
+    local activeZoneCount = 0
+    
+    -- Count SAM deployment zones
+    for _, zoneInfo in pairs(MissionState.zones.srSamZones) do
+        if zoneInfo.active then
+            activeZoneCount = activeZoneCount + 1
+        end
+    end
+    
+    for _, zoneInfo in pairs(MissionState.zones.lrSamZones) do
+        if zoneInfo.active then
+            activeZoneCount = activeZoneCount + 1
+        end
+    end
+    
+    return activeZoneCount
+end
+
 -- =====================================================================================
 -- SCRIPT INITIALIZATION
 -- =====================================================================================
 
--- Initialize the mission when script loads
-timer.scheduleFunction(function()
-    initializeSupplyMission()
-    return nil
-end, nil, timer.getTime() + 1)
+-- MAIN INITIALIZATION FUNCTION
+function SAM_Resupply_Init()
+    Utils.showMessage("SAM Auto Resupply v0.3.24 Initializing...", 10)
+    
+    -- Discover SAM deployment zones first  
+    Utils.showMessage("Starting SAM zone discovery...", 8)
+    if not ZoneDiscovery.discoverDeploymentZones() then
+        Utils.showMessage("ERROR: Failed to discover SAM deployment zones! Check zone naming.", 10)
+        return
+    end
+    Utils.showMessage("SAM zone discovery completed successfully!", 8)
+    
+    -- Initialize cargo management system
+    CargoManagement.initialize()
+    
+    -- Discover all supply zones
+    local allZones = Utils.discoverSupplyZones()
+    MissionState.zones.truckSpawnZones = allZones.truck
+    MissionState.zones.heloSpawnZones = allZones.helo
+    
+    if #MissionState.zones.truckSpawnZones > 0 then
+        Utils.showMessage("Found " .. #MissionState.zones.truckSpawnZones .. " truck supply zones", 5)
+    end
+    
+    if #MissionState.zones.heloSpawnZones > 0 then
+        Utils.showMessage("Found " .. #MissionState.zones.heloSpawnZones .. " helicopter supply zones", 5)
+    end
+    
+    -- Find and validate ammo supply zone
+    local ammoZone = trigger.misc.getZone(CONFIG.ZONES.SUPPORT_AMMO_SUPPLY)
+    if ammoZone then
+        MissionState.zones.ammoSupplyZone = ammoZone
+        Utils.showMessage("Found ammo supply zone: " .. CONFIG.ZONES.SUPPORT_AMMO_SUPPLY, 5)
+        
+        -- Spawn initial supply objects
+        CargoManagement.spawnInitialSupplyObjects()
+    else
+        Utils.showMessage("WARNING: Ammo supply zone " .. CONFIG.ZONES.SUPPORT_AMMO_SUPPLY .. " not found!", 10)
+    end
+    
+    -- Zone states are already initialized in ZoneDiscovery.discoverDeploymentZones()
+    
+    -- Start periodic monitoring
+    ZoneMonitoring.startMultiZoneMonitoring()
+    
+    -- Add radio menu if EventHandler is available
+    if EventHandler then
+        EventHandler.addRadioMenu()
+    end
+    
+    Utils.showMessage("SAM Auto Resupply System Ready! Monitoring " .. 
+                     Utils.getActiveZoneCount() .. " zones with " .. 
+                     CONFIG.STARTING_SUPPLY_OBJECTS .. " supply objects spawned.", 10)
+end
+
+-- Schedule initialization
+timer.scheduleFunction(SAM_Resupply_Init, nil, timer.getTime() + 1)
+
