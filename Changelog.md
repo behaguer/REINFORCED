@@ -1,0 +1,182 @@
+-- Current FEATURES:
+-- - Inlcudes example mission file
+-- - Supports unlimited deployment zones with SUPPORT_HELO_DEPLOY, SUPPORT_TRUCK_DEPLOY, SR_SAM and LR_SAM prefixes
+-- - Automatic discovery of numbered SAM zone variants (SR_SAM-1, SR_SAM-2, etc.)
+-- - Deploys correct SAM unit types per zone (SHORT_RANGE for SR_SAM, LONG_RANGE for LR_SAM)
+-- - Continuous monitoring and resupply for all zones simultaneously
+-- - Per-zone mission state tracking and spawn count management
+-- - Enhanced radio menu with multi-zone status reporting
+-- - Distance-based vehicle selection: trucks for nearby zones, helicopters for distant ones
+-- - Automatic vehicle type optimization based on CONFIG.MAX_DISTANCE_FROM_DEPLOY setting
+-- - Concurrent deployment limiting via CONFIG.MAX_CONCURRENT_DEPLOYMENTS setting
+
+-- v0.3.24 - HIERARCHICAL DEBUG LEVELS:
+--   * Added hierarchical debug level system with CONFIG.DEBUG_MODE >= level
+--   * Debug levels: 0=off, 1=basic, 2=detailed, 3=verbose
+--   * Utils.showDebugMessage now supports level parameter with default level 1
+--   * Debug messages now show level indicator (e.g., "DEBUG L1:", "DEBUG L2:")
+--   * Allows for more granular debug output control during testing and troubleshooting
+-- v0.3.23 - DIRECT ZONE APPROACH FIX:
+--   * CRITICAL: Fixed helicopters heading away from zones during approach phase
+--   * Replaced orbit command with direct route mission to zone center
+--   * Helicopters now receive a direct waypoint to the zone center when approaching
+--   * Reduced approach speed from 15 m/s to 10 m/s for more controlled entry
+--   * Added HOLD task at zone center waypoint to ensure helicopters stop there
+--   * Prevents helicopters from circling around zones and flying away
+--   * Maintains all predictive stopping and fast monitoring improvements
+-- v0.3.22 - PREDICTIVE ZONE STOPPING:
+--   * Reduced helicopter check interval from 10s to 3s for much faster response times
+--   * Added predictive zone approach detection with velocity calculation and ETA estimation
+--   * Helicopters now receive slow-down commands when approaching zones (before entering)
+--   * Added approach distance detection (200m or 2x zone radius, whichever is larger)
+--   * Improved stop command reliability with multiple backup methods and state tracking
+--   * Reduced SAM deployment timeout from 15s to 10s for faster mission completion
+--   * Reduced forced landing timeout from 8s to 6s for more responsive behavior
+--   * Enhanced debug logging with velocity, speed, and ETA information
+--   * Prevents helicopters from flying over small zones by stopping them in advance
+-- v0.3.21 - ENHANCED HELICOPTER DEBUG LOGGING:
+--   * Added comprehensive debug messages to track helicopter spawning and movement
+--   * Enhanced position monitoring with detailed location and zone status feedback
+--   * Added monitoring cycle counter to track helicopter behavior over time
+--   * Debug messages show helicopter coordinates, distance to zone, and zone entry status
+--   * Improved troubleshooting for cases where helicopters don't enter zones
+--   * All debug messages visible even with CONFIG.DEBUG_MODE = 1 for better visibility
+-- v0.3.20 - SETTASK PARAMETER FIX:
+--   * CRITICAL: Fixed "Parameter 1 (task table) missed in function setTask" error
+--   * Removed invalid controller:setTask(nil) call that was causing script errors
+--   * Helicopter stopping logic now uses proper HOLD task as primary method
+--   * Maintained all helicopter stopping and hovering functionality
+--   * Fixed method numbering in helicopter position monitoring code
+-- v0.3.19 - HELICOPTER ROUTE VALIDATION FIX:
+--   * CRITICAL: Fixed "invalid route data" error that prevented helicopter spawning
+--   * Restored spawn waypoint to helicopter route for proper DCS route validation
+--   * Route now uses 2 waypoints: spawn -> target (with HOLD task at target)
+--   * Maintained all stopping and hovering enhancements from v0.3.18
+--   * Helicopters still forced to stop and hover at target zone with multiple fallback methods
+--   * Fixed validation function to properly handle helicopter route structure
+-- v0.3.18 - HELICOPTER STOP AND HOVER ENHANCEMENT:
+--   * CRITICAL: Helicopters now reliably stop and hover in zones instead of flying over them
+--   * Changed helicopter route to spawn -> target waypoints with built-in HOLD task at target
+--   * Added multiple stopping methods: HOLD + LAND + low-speed ORBIT for maximum reliability
+--   * Helicopters now receive immediate LAND command when entering any zone
+--   * Reduced SAM deployment timeout from 20 to 15 seconds for faster activation
+--   * Increased altitude threshold to 80m AGL for more responsive deployment
+--   * Force descent triggers after 8 seconds (down from 10) with aggressive LAND tasks
+--   * Backup very low orbit (15m AGL) if LAND command fails
+--   * Route uses 2 waypoints only: spawn -> target (HOLD task prevents any RTB behavior)
+-- v0.3.17 - HELICOPTER ZONE PERSISTENCE FIX:
+--   * CRITICAL: Fixed helicopters flying over zones and returning to base instead of landing
+--   * Fixed time tracking bug where "time in zone" always showed 0 seconds
+--   * Helicopters now properly accumulate time in zone and deploy SAMs after 20 seconds
+--   * Added dynamic orbit task assignment to force helicopters to stay in target zones
+--   * Removed legacy setupHeloRouteToZone function that was causing RTB behavior
+--   * Simplified helicopter routes to 2 waypoints only (prevents automatic RTB)
+--   * Added progressive descent forcing for helicopters that hover too high
+--   * Increased altitude threshold to 100m AGL for more forgiving SAM deployment
+--   * Enhanced helicopter monitoring with persistent orbit commands
+-- v0.3.16 - CRASH-SAFE HELICOPTER SPAWNING:
+--   * CRITICAL: Complete rewrite of helicopter spawning system to prevent DCS crashes
+--   * Added Utils.validateHeloGroupData() for comprehensive group validation before spawning
+--   * Added Utils.createSafeHeloGroupData() for crash-safe group structure creation
+--   * Simplified helicopter route to 3 basic waypoints with no complex tasks
+--   * Enhanced helicopter spawn verification with retry logic (up to 3 attempts)
+--   * Removed problematic Orbit tasks that could cause DCS crashes
+--   * Limited helicopter types to Mi-8MT only for maximum compatibility
+--   * Added existing group name collision detection and cleanup
+--   * Improved error handling with detailed crash prevention messages
+--   * Helicopter spawning now uses safest possible group data structure
+-- v0.3.15 - HELICOPTER ROUTE TEMPLATE FIX:
+--   * Increased altitude detection threshold from 30m to 50m AGL for more reliable deployment triggering
+--   * Added time-based fallback: SAMs deploy after 30 seconds in zone regardless of altitude
+--   * Enhanced debugging with zone time tracking and altitude feedback for helicopters too high
+--   * Reduced deployment delay from 3 to 2 seconds for faster SAM activation
+--   * Fixed issue where helicopters would hover in zone but SAMs wouldn't deploy due to strict altitude requirements
+--   * Added comprehensive helicopter status reporting during zone operations
+-- v0.3.13 - HELICOPTER GROUND DEPLOYMENT FIX:
+--   * Fixed helicopters landing at nearby airports instead of in zones
+--   * Replaced "Land" task with direct ground-level waypoint and Orbit task to keep helicopters in zone
+--   * Modified helicopter route to use 3 waypoints: spawn -> approach -> hover at ground level in zone
+--   * Adjusted altitude detection threshold to 30m AGL for more reliable ground-level detection
+--   * Reduced deployment delay to 3 seconds for faster SAM activation after helicopter arrival
+--   * Helicopters now hover at 10m above ground level in the target zone instead of seeking airports
+-- v0.3.12 - HELICOPTER LANDING & DEPLOYMENT ENHANCEMENT:
+--   * Added 3-waypoint helicopter route: spawn -> approach -> landing with proper Land task
+--   * Enhanced helicopter position monitoring to check both zone proximity AND altitude for landing detection
+--   * Modified helicopter deployment trigger to require landing (altitude < 20m AGL) instead of just zone entry
+--   * Added 5-second delay for SAM deployment after helicopter landing to allow stabilization
+--   * Increased cleanup delay to 30 seconds to ensure helicopters complete their landing sequence
+--   * Fixed helicopter waypoint structure with proper Landing type and Land task for DCS AI
+-- v0.3.11 - HELICOPTER FLIGHT & DEPLOYMENT FIX:
+--   * Fixed helicopter spawning to include target zone in initial route (2-point route: spawn -> target)
+--   * Added target zone parameter to spawnNewHeloForZone() function for proper routing
+--   * Enhanced helicopter position monitoring with distance tracking and debug messages
+--   * Helicopters now properly fly to deployment zones, land, deploy SAMs, and despawn
+--   * Added comprehensive debug logging for helicopter movement and zone detection
+--   * Fixed missing route setup that was preventing helicopters from moving to target zones
+-- v0.3.10 - HELICOPTER CRASH PREVENTION + ENHANCED SPAWNING SAFETY:
+--   * Fixed helicopter spawning to use Group.Category.HELICOPTER instead of Group.Category.AIR
+--   * Added critical altitude and alt_type parameters to helicopter unit data to prevent spawn crashes
+--   * Added CONFIG.VEHICLE.ENABLE_HELICOPTER_SPAWNING safety switch (disabled by default)
+--   * Enhanced helicopter group data structure with proper altitude settings for all units
+--   * Added automatic fallback to truck deployment when helicopter spawning is disabled
+--   * Improved helicopter unit spacing and positioning for safer spawning
+--   * Added comprehensive safety checks before attempting helicopter spawning operations
+-- v0.3.9 - CONFIG.GROUPS REMOVAL + TEMPLATE SYSTEM CLEANUP:
+--   * Completely removed CONFIG.GROUPS configuration section (old template system)
+--   * Updated all vehicle filtering logic to use dynamic naming patterns (SupplyTruck_*, SupplyHelo_*)
+--   * Replaced deployFromTemplate() calls with direct spawnManually() calls
+--   * Removed obsolete SAMTemplate stub and template cache system
+--   * Simplified SAM deployment to use only CONFIG.SAM_UNITS zone-based configuration
+--   * Fixed event handler to use dynamic group name pattern matching
+--   * System now fully relies on the new modular, zone-based architecture
+-- v0.3.8 - ENHANCED VEHICLE CLEANUP + DEBUG TOOLS:
+--   * Simplified vehicle cleanup to use immediate destruction instead of complex relocation
+--   * Added extensive debug messages to track cleanup process
+--   * Added manual "Manual Vehicle Cleanup" radio command for testing
+--   * Enhanced debugging to identify why vehicles weren't being removed
+--   * Cleanup now provides clear feedback messages when vehicles are destroyed
+--   * Fixed potential timing issues with complex cleanup procedures
+-- v0.3.7 - SAFE VEHICLE CLEANUP:
+--   * Re-enabled vehicle cleanup with safer "relocate and destroy" method
+--   * Vehicles are moved to remote parking areas before destruction to prevent visual glitches
+--   * 30-second delay between relocation and destruction for smooth cleanup
+--   * Cleanup still uses pcall() protection and zone-specific tracking
+--   * Supply vehicles now properly despawn after SAM deployment while maintaining crash safety
+-- v0.3.6 - ULTRA-SAFE CRASH PREVENTION:
+--   * Removed all teleport() and destroy() calls that were causing DCS crashes
+--   * Replaced with ultra-conservative deactivation approach using controller:setCommand('Stop')
+--   * Added CONFIG.SAM.ENABLE_VEHICLE_CLEANUP option to completely disable cleanup if needed
+--   * Increased cleanup delay to 10 seconds for maximum safety
+--   * Fixed helicopter spawning with proper altitude settings and complete route data
+--   * Enhanced helicopter unit data structure with proper altitude assignment
+--   * Supply vehicles now simply stop and remain inactive instead of being destroyed
+-- v0.3.5 - CONFIGURABLE UNIT SYSTEM:
+--   * Added CONFIG.SUPPLY_VEHICLES section for customizable truck and helicopter units
+--   * Support for multiple unit types per coalition (RED/BLUE) with different vehicle configurations
+--   * Replaced hardcoded Ural-375 and Mi-8MT units with configurable alternatives
+--   * Added utility functions Utils.getSupplyTruckUnits() and Utils.getSupplyHeloUnits()
+--   * Enhanced spawning logic to support multiple units per supply group with proper spacing
+--   * Coalition-based vehicle selection with fallback to RED coalition if coalition not found
+-- v0.3.1 - CRASH FIXES: 
+--   * Replaced unsafe coalition.getGroups() calls with cached, safe alternatives
+--   * Added pcall() protection for all group destruction operations  
+--   * Enhanced error handling for unit position queries and group operations
+--   * Reduced frequency of expensive DCS API calls to prevent performance issues
+-- v0.3.0 - Multi-Zone Support:
+-- - Added support for multiple deployment zones with SR_SAM/LR_SAM prefixes
+-- - Automatic zone discovery for SR_SAM, SR_SAM-1, LR_SAM, LR_SAM-1, etc.
+-- - Zone-specific SAM unit deployment (SHORT_RANGE vs LONG_RANGE from CONFIG.SAM_UNITS)
+-- - Multi-zone monitoring system with per-zone state tracking
+-- - Zone-specific vehicle routing and deployment logic
+-- - Improved fallback logic for spawn zones and template units
+--
+-- FEATURES:
+-- - Supports unlimited deployment zones with SR_SAM and LR_SAM prefixes
+-- - Automatic discovery of numbered zone variants (SR_SAM-1, SR_SAM-2, etc.)
+-- - Deploys correct SAM unit types per zone (SHORT_RANGE for SR_SAM, LONG_RANGE for LR_SAM)
+-- - Continuous monitoring and resupply for all zones simultaneously
+-- - Per-zone mission state tracking and spawn count management
+-- - Enhanced radio menu with multi-zone status reporting
+-- - Distance-based vehicle selection: trucks for nearby zones, helicopters for distant ones
+-- - Automatic vehicle type optimization based on CONFIG.MAX_DISTANCE_FROM_DEPLOY setting
+-- - Concurrent deployment limiting via CONFIG.MAX_CONCURRENT_DEPLOYMENTS setting
