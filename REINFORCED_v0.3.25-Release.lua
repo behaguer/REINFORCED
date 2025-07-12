@@ -128,12 +128,9 @@ local CONFIG = {
 
     AVAILABLE_SUPPLY_OBJECT_TYPES = {
         { type = "ammo_cargo", name = "Ammo Crate" },
-        { type = "fueltank", name = "Fuel Tank" },
         { type = "iso_container", name = "ISO Container" },
         { type = "iso_container_small", name = "Small Container" },
-        { type = "container_cargo", name = "Cargo Container" },
-        { type = "f_bar_cargo", name = "F-Bar Cargo" },
-        { type = "iso_container_small", name = "Supply Box" }
+        { type = "container_cargo", name = "Cargo Container" }
     }
 }
 
