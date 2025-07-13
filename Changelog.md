@@ -10,6 +10,11 @@
 -- - Automatic vehicle type optimization based on CONFIG.MAX_DISTANCE_FROM_DEPLOY setting
 -- - Concurrent deployment limiting via CONFIG.MAX_CONCURRENT_DEPLOYMENTS setting
 
+-- v0.3.27 - CONTAINERS LOGIC AND FUNCTIONS
+--   * Added destructable container spawns
+--   * Added cleanup for destroyed containers
+--   * Updated debug messaging
+--   * Added debugExistingObject functions so I dont waste hours of time trying to guess the unit type
 -- v0.3.26 - CONTAINERS LOGIC AND FUNCTIONS
 --   * Added container spawn management
 --   * Added supply spawn logic and functions

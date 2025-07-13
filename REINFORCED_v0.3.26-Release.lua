@@ -13,7 +13,7 @@ local CONFIG = {
 
     CHECK_INTERVAL = 10, -- Interval for checking zones and units (in seconds)
     HELICOPTER_CHECK_INTERVAL = 3, -- Faster interval for helicopter monitoring (in seconds)
-    DEBUG_MODE = 1, -- Debug levels: 0=off, 1=basic, 2=detailed, 3=verbose
+    DEBUG_MODE = 0, -- Debug levels: 0=off, 1=basic, 2=detailed, 3=verbose
 
     -- Zone Names (must match mission editor exactly)
     ZONES = {
@@ -37,7 +37,7 @@ local CONFIG = {
     },
 
     -- Starting Supply Objects this will be divided across supply zones
-    STARTING_SUPPLY_OBJECTS = 80, 
+    STARTING_SUPPLY_OBJECTS = 50, 
     
     -- SAM Deployment Settings
     SAM = {
@@ -129,10 +129,14 @@ local CONFIG = {
     },
 
     AVAILABLE_SUPPLY_OBJECT_TYPES = {
-        { type = "ammo_cargo", name = "Ammo Crate" },
-        { type = "iso_container", name = "ISO Container" },
-        { type = "iso_container_small", name = "Small Container" },
-        { type = "container_cargo", name = "Cargo Container" }
+        { type = "Cargo01", name = "M92 Cargo Container 1" },
+        { type = "Cargo02", name = "M92 Cargo Container 2" },
+        { type = "Cargo03", name = "M92 Cargo Container 3" },
+        { type = "Cargo04", name = "M92 Cargo Container 4" },
+        { type = "Cargo05", name = "M92 Cargo Container 5" },
+        { type = "Cargo06", name = "M92 Cargo Container 6" },
+        -- { type = "Container_20ft", name = "20ft Container" }
+        -- { type = "Container_40ft", name = "40ft Container" }
     }
 }
 
@@ -419,6 +423,250 @@ function Utils.createSafeHeloGroupData(uniqueGroupName, spawnPoint, route, heloT
     table.insert(safeGroupData.units, unitData)
     
     return safeGroupData
+end
+
+-- Debug function to scan existing M92 Cargo objects and report their types
+function Utils.debugExistingObjects()
+    Utils.showDebugMessage("=== SCANNING FOR EXISTING M92 CARGO OBJECTS ===", 10, 1)
+    
+    local objectNames = {
+        "M92 Cargo 01",
+        "M92 Cargo 02", 
+        "M92 Cargo 03",
+        "M92 Cargo 04",
+        "M92 Cargo 05",
+        "M92 Cargo 06"
+    }
+    
+    local foundObjects = 0
+    local foundTypes = {}
+    
+    for _, objectName in ipairs(objectNames) do
+        local staticObj = StaticObject.getByName(objectName)
+        if staticObj then
+            foundObjects = foundObjects + 1
+            
+            -- Try to get the object's type information
+            local success, objType = pcall(function() return staticObj:getTypeName() end)
+            if success and objType then
+                Utils.showDebugMessage("Found object: " .. objectName .. " -> Type: '" .. objType .. "'", 10, 1)
+                table.insert(foundTypes, {name = objectName, type = objType})
+            else
+                Utils.showDebugMessage("Found object: " .. objectName .. " -> Type: UNKNOWN (getTypeName failed)", 8, 1)
+            end
+            
+            -- Also try to get category information
+            local success2, category = pcall(function() return staticObj:getCategory() end)
+            if success2 and category then
+                Utils.showDebugMessage("  Category: " .. tostring(category), 8, 1)
+            end
+            
+            -- Try to get descriptor information
+            local success3, desc = pcall(function() return staticObj:getDesc() end)
+            if success3 and desc and desc.typeName then
+                Utils.showDebugMessage("  Descriptor typeName: '" .. desc.typeName .. "'", 8, 1)
+            end
+        else
+            Utils.showDebugMessage("Object NOT found: " .. objectName, 5, 1)
+        end
+    end
+    
+    Utils.showDebugMessage("=== Object SCAN COMPLETE: Found " .. foundObjects .. " objects ===", 10, 1)
+    
+    if foundObjects > 0 then
+        Utils.showMessage("DEBUG: Found " .. foundObjects .. " Object objects. Check debug messages for types.", 10)
+        
+        -- If we found objects, let's update our configuration with the correct types
+        if #foundTypes > 0 then
+            Utils.showDebugMessage("Suggested AVAILABLE_SUPPLY_OBJECT_TYPES configuration:", 10, 1)
+            for _, objInfo in ipairs(foundTypes) do
+                Utils.showDebugMessage('{ type = "' .. objInfo.type .. '", name = "' .. objInfo.name .. '" },', 8, 1)
+            end
+        end
+    else
+        Utils.showMessage("WARNING: No Objects found in mission! Check object names.", 10)
+    end
+    
+    return foundObjects, foundTypes
+end
+
+-- Discover all supply zones (truck and helicopter spawn zones)
+function Utils.discoverSupplyZones()
+    local truckZones = {}
+    local heloZones = {}
+    local ammoZones = {}
+    
+    Utils.showDebugMessage("Discovering supply zones...", 5, 2)
+    
+    -- Try to discover zones using mission data first
+    local env = _G.env or {}
+    if env.mission and env.mission.triggers and env.mission.triggers.zones then
+        for _, zone in pairs(env.mission.triggers.zones) do
+            if zone.name then
+                local zoneName = zone.name
+                
+                -- Check for truck deploy zones
+                if string.find(zoneName, "^" .. CONFIG.ZONES.SUPPORT_TRUCK_DEPLOY) then
+                    local zoneObj = trigger.misc.getZone(zoneName)
+                    if zoneObj then
+                        table.insert(truckZones, {
+                            name = zoneName,
+                            zone = zoneObj
+                        })
+                        Utils.showDebugMessage("Found truck spawn zone: " .. zoneName, 5, 2)
+                    end
+                end
+                
+                -- Check for helo deploy zones
+                if string.find(zoneName, "^" .. CONFIG.ZONES.SUPPORT_HELO_DEPLOY) then
+                    local zoneObj = trigger.misc.getZone(zoneName)
+                    if zoneObj then
+                        table.insert(heloZones, {
+                            name = zoneName,
+                            zone = zoneObj
+                        })
+                        Utils.showDebugMessage("Found helo spawn zone: " .. zoneName, 5, 2)
+                    end
+                end
+
+                -- Check for ammo supply zones
+                if string.find(zoneName, "^" .. CONFIG.ZONES.SUPPORT_AMMO_SUPPLY) then
+                    local zoneObj = trigger.misc.getZone(zoneName)
+                    if zoneObj then
+                        table.insert(ammoZones, {
+                            name = zoneName,
+                            zone = zoneObj
+                        })
+                        Utils.showDebugMessage("Found ammo supply zone: " .. zoneName, 5, 2)
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Fallback: Try to get zones by name pattern
+    if #truckZones == 0 and #heloZones == 0 and #ammoZones == 0 then
+        Utils.showDebugMessage("No supply zones found via mission data, trying name-based discovery...", 5, 2)
+        
+        -- Try common naming patterns for truck zones
+        for i = 0, 20 do  -- Check up to 20 numbered zones
+            local suffix = (i == 0) and "" or ("-" .. i)
+            
+            -- Truck zones
+            local truckZoneName = CONFIG.ZONES.SUPPORT_TRUCK_DEPLOY .. suffix
+            local truckZone = trigger.misc.getZone(truckZoneName)
+            if truckZone then
+                table.insert(truckZones, {
+                    name = truckZoneName,
+                    zone = truckZone
+                })
+                Utils.showDebugMessage("Found truck spawn zone: " .. truckZoneName, 5, 2)
+            end
+            
+            -- Helo zones
+            local heloZoneName = CONFIG.ZONES.SUPPORT_HELO_DEPLOY .. suffix
+            local heloZone = trigger.misc.getZone(heloZoneName)
+            if heloZone then
+                table.insert(heloZones, {
+                    name = heloZoneName,
+                    zone = heloZone
+                })
+                Utils.showDebugMessage("Found helo spawn zone: " .. heloZoneName, 5, 2)
+            end
+
+            -- ammoZones zones
+            local ammoZoneName = CONFIG.ZONES.SUPPORT_AMMO_SUPPLY .. suffix
+            local ammoZone = trigger.misc.getZone(ammoZoneName)
+            if ammoZone then
+                table.insert(ammoZone, {
+                    name = ammoZoneName,
+                    zone = ammoZone
+                })
+                Utils.showDebugMessage("Found ammo spawn zone: " .. ammoZoneName, 5, 2)
+            end
+        end
+    end
+    
+    -- Store discovered zones
+    MissionState.zones.truckSpawnZones = truckZones
+    MissionState.zones.heloSpawnZones = heloZones
+    MissionState.zones.ammoSpawnZones = ammoZones
+    
+    Utils.showMessage("Discovered " .. #truckZones .. " truck spawn zones and " .. #heloZones .. " helo spawn zones", 8)
+    
+    -- Set legacy references if base zones exist
+    for _, zoneInfo in pairs(truckZones) do
+        if zoneInfo.name == CONFIG.ZONES.SUPPORT_TRUCK_DEPLOY then
+            MissionState.zones.truckSpawn = zoneInfo.zone
+            break
+        end
+    end
+    
+    for _, zoneInfo in pairs(heloZones) do
+        if zoneInfo.name == CONFIG.ZONES.SUPPORT_HELO_DEPLOY then
+            MissionState.zones.heloSpawn = zoneInfo.zone
+            break
+        end
+    end
+
+    for _, zoneInfo in pairs(ammoZones) do
+        if zoneInfo.name == CONFIG.ZONES.SUPPORT_AMMO_SUPPLY then
+            MissionState.zones.ammoSpawnZone = zoneInfo.zone
+            break
+        end
+    end
+    
+    return #truckZones > 0 or #heloZones > 0 or #ammoZones > 0
+end
+
+-- Find the closest supply zone of specified type to a target zone
+function Utils.getClosestSupplyZone(targetZone, vehicleType)
+    if not targetZone or not targetZone.point then
+        Utils.showDebugMessage("Invalid target zone for closest supply zone search", 5, 3)
+        return nil
+    end
+    
+    local targetPoint = {x = targetZone.point.x, z = targetZone.point.z}
+    local supplyZones = {}
+    
+    -- Get appropriate supply zones based on vehicle type
+    if vehicleType == "truck" then
+        supplyZones = MissionState.zones.truckSpawnZones
+    elseif vehicleType == "helo" then
+        supplyZones = MissionState.zones.heloSpawnZones
+    else
+        Utils.showDebugMessage("Invalid vehicle type for supply zone search: " .. tostring(vehicleType), 5, 3)
+        return nil
+    end
+    
+    if #supplyZones == 0 then
+        Utils.showDebugMessage("No " .. vehicleType .. " supply zones available", 5, 3)
+        return nil
+    end
+    
+    local closestZone = nil
+    local shortestDistance = math.huge
+    
+    -- Find the closest supply zone
+    for _, zoneInfo in pairs(supplyZones) do
+        if zoneInfo.zone and zoneInfo.zone.point then
+            local supplyPoint = {x = zoneInfo.zone.point.x, z = zoneInfo.zone.point.z}
+            local distance = Utils.getDistance(targetPoint, supplyPoint)
+            
+            Utils.showDebugMessage("Distance from " .. zoneInfo.name .. " to target: " .. math.floor(distance) .. "m", 5, 3)
+            
+            if distance < shortestDistance then
+                shortestDistance = distance
+                closestZone = zoneInfo
+            end
+        end
+    end
+    
+    if closestZone then
+        Utils.showDebugMessage("Closest " .. vehicleType .. " supply zone: " .. closestZone.name .. " (" .. math.floor(shortestDistance) .. "m away)", 5, 2)
+    end
+    
+    return closestZone, shortestDistance
 end
 
 -- =====================================================================================
@@ -755,7 +1003,7 @@ function ZoneMonitoring.checkSingleZone(zoneInfo)
                 else
                     -- No spawns available - release the reserved slot
                     MissionState.vehicles.supplyGroups[zoneName] = nil
-                    Utils.showDebugMessage("No spawns remaining for zone " .. zoneName .. ", released deployment slot", 5)
+                    Utils.showDebugMessage("No spawns remaining for zone " .. zoneName .. ", released deployment slot" .. "helo" .. MissionState.missions.helo.spawnCount .. "truck".. MissionState.missions.truck.spawnCount , 5)
                 end
             end
         end
@@ -1248,7 +1496,7 @@ function VehicleSpawning.spawnNewTruckForZone(zoneName, uniqueGroupName, targetZ
                     -- Deduct supply cost from the nearest ammo supply zone
                     local costDeducted = CargoManagement.deductSupplyCost(targetZone, "Supply Truck", supplyCost)
                     if costDeducted then
-                        Utils.showMessage("Deducted " .. supplyCost .. " supply units for truck deployment in " .. zoneName, 8)
+                        Utils.showDebugMessage("Deducted " .. supplyCost .. " supply units for truck deployment in " .. zoneName, 8,2)
                     else
                         Utils.showDebugMessage("Warning: Failed to deduct supply cost for truck deployment", 5)
                     end
@@ -1431,14 +1679,14 @@ function VehicleSpawning.spawnNewHeloForZone(zoneName, uniqueGroupName, targetZo
         if newGroup and newGroup:isExist() then
             local units = newGroup:getUnits()
             if units and #units > 0 then
-                Utils.showMessage("Supply helicopter spawned successfully for zone " .. zoneName .. " and is flying to target!", 8)
+                Utils.showDebugMessage("Supply helicopter spawned successfully for zone " .. zoneName .. " and is flying to target!", 8,2)
                 
                 -- Deduct supply cost from the nearest ammo supply zone
                 local costDeducted = CargoManagement.deductSupplyCost(targetZone, "Supply Helicopter", supplyCost)
                 if costDeducted then
-                    Utils.showMessage("Deducted " .. supplyCost .. " supply units for helicopter deployment in " .. zoneName, 8)
+                    Utils.showDebugMessage("Deducted " .. supplyCost .. " supply units for helicopter deployment in " .. zoneName, 8,3)
                 else
-                    Utils.showDebugMessage("Warning: Failed to deduct supply cost for helicopter deployment", 5)
+                    Utils.showDebugMessage("Warning: Failed to deduct supply cost for helicopter deployment", 5,2)
                 end
                 
                 -- Store the group reference for this zone
@@ -1560,11 +1808,10 @@ function VehicleSpawning.spawnHeloForZone(zoneInfo)
             return nil
         end, nil, timer.getTime() + 2)
     else
-        Utils.showDebugMessage("Helicopter spawn failed for zone " .. zoneName, 8,1)
+        Utils.showDebugMessage("Helicopter spawn failed for zone " .. zoneName, 8,3)
         -- Release the deployment slot if spawn failed immediately
         if MissionState.vehicles.supplyGroups[zoneName] == "DEPLOYMENT_PENDING" then
             MissionState.vehicles.supplyGroups[zoneName] = nil
-            Utils.showDebugMessage("Released deployment slot for failed helicopter spawn in zone " .. zoneName, 5, 1)
         end
     end
     
@@ -1664,7 +1911,7 @@ function VehicleSpawning.startTruckPositionMonitoringForZone(zoneInfo, supplyGro
         end
         
         if not truckGroup or not truckGroup:isExist() then
-            Utils.showMessage("Supply truck has been destroyed! Mission failed for zone " .. zoneName .. ".", 10)
+            Utils.showMessage("Intel reports a supply truck has been destroyed! Well done.", 10)
             if zoneState then
                 zoneState.truckActive = false
             end
@@ -1709,10 +1956,10 @@ function VehicleSpawning.startHeloPositionMonitoringForZone(zoneInfo, supplyGrou
     -- Use provided group or fall back to legacy reference
     local heloGroup = supplyGroup or MissionState.vehicles.helo
     
-    Utils.showMessage("Starting helicopter position monitoring for zone " .. zoneName, 8)
-    Utils.showMessage("DEBUG: Helicopter group: " .. (heloGroup and heloGroup:getName() or "nil"), 8)
-    Utils.showMessage("DEBUG: Target zone: " .. zoneName .. " at (" .. targetZone.point.x .. ", " .. targetZone.point.z .. ") radius: " .. targetZone.radius, 8)
-    Utils.showDebugMessage("Helicopter group: " .. (heloGroup and heloGroup:getName() or "nil"), 5)
+    Utils.showDebugMessage("Starting helicopter position monitoring for zone " .. zoneName, 8,3)
+    Utils.showDebugMessage("Helicopter group: " .. (heloGroup and heloGroup:getName() or "nil"), 8, 3)
+    Utils.showDebugMessage("Target zone: " .. zoneName .. " at (" .. targetZone.point.x .. ", " .. targetZone.point.z .. ") radius: " .. targetZone.radius, 8, 3)
+    Utils.showDebugMessage("Helicopter group: " .. (heloGroup and heloGroup:getName() or "nil"), 5, 3)
     
     local timeInZone = 0 -- Track how long helicopter has been in zone
     local lastInZone = false
@@ -1730,7 +1977,7 @@ function VehicleSpawning.startHeloPositionMonitoringForZone(zoneInfo, supplyGrou
         end
         
         if not heloGroup or not heloGroup:isExist() then
-            Utils.showMessage("Supply helicopter has been destroyed! Mission failed for zone " .. zoneName .. ".", 10)
+            Utils.showMessage("Intel reports a supply helicopter has been destroyed! Well done.", 10)
             if zoneState then
                 zoneState.heloActive = false
             end
@@ -1918,7 +2165,7 @@ function VehicleSpawning.startHeloPositionMonitoringForZone(zoneInfo, supplyGrou
                 else
                     -- Helicopter left zone - reset timer and flags
                     if lastInZone then
-                        Utils.showMessage("Helicopter left zone " .. zoneName .. " - resetting deployment timer", 8)
+                        Utils.showDebugMessage("Helicopter left zone " .. zoneName .. " - resetting deployment timer", 8,2)
                         stopCommandSent = false -- Allow stop commands again if it re-enters
                     end
                     timeInZone = 0
@@ -2000,7 +2247,25 @@ function CargoManagement.initialize()
     -- Spawn initial supply objects
     CargoManagement.spawnInitialSupplyObjects()
     
+    -- Start periodic cleanup of destroyed cargo objects
+    CargoManagement.startPeriodicCleanup()
+    
     return true
+end
+
+-- Start periodic cleanup of destroyed cargo objects
+function CargoManagement.startPeriodicCleanup()
+    local function cleanupCycle()
+        -- Clean up destroyed cargo objects
+        CargoManagement.cleanupDestroyedCargo()
+        
+        -- Schedule next cleanup in 30 seconds
+        return timer.getTime() + 30
+    end
+    
+    -- Start the cleanup cycle after 30 seconds
+    timer.scheduleFunction(cleanupCycle, nil, timer.getTime() + 30)
+    Utils.showDebugMessage("Started periodic cargo cleanup (every 30 seconds)", 5, 2)
 end
 
 -- Discover all ammo supply zones (similar to other zone discovery functions)
@@ -2163,8 +2428,13 @@ function CargoManagement.spawnRandomSupplyObject(targetZone)
         ["type"] = selectedType.type,
         ["mass"] = 1000, -- Default mass in kg
         ["canCargo"] = true,
-        ["shape_name"] = selectedType.type,
-        ["heading"] = math.random(0, 359),
+        ["heading"] = 0,
+        ["category"] = "Structures", -- Ensure proper category for destructible objects
+        ["can_be_dead"] = true, -- Allow object to be destroyed
+        ["dead"] = false, -- Object starts alive
+        ["unitId"] = math.random(100000, 999999), -- Unique unit ID for tracking
+        ["life"] = 1, -- Set life points (1 means destructible with minimal damage)
+        ["life_"] = 1, -- Alternative life property
     }
     
     -- Spawn the cargo object
@@ -2223,7 +2493,7 @@ function CargoManagement.getGridPositionInZone(zone)
     
     local gridState = MissionState.gridStates[zoneName]
     local gridSize = 6  -- 6x6 grid
-    local objectSpacing = 8  -- 8 meters between objects
+    local objectSpacing = 4  -- 8 meters between objects
     local gridSpacing = gridSize * objectSpacing + 20  -- Space between grids (20m buffer)
     
     -- Calculate grid offset (grids expand southward)
@@ -2461,6 +2731,49 @@ function CargoManagement.canAffordDeployment(targetZone, vehicleType, supplyCost
     return canAfford
 end
 
+
+-- Check if a cargo object still exists and is alive
+function CargoManagement.isCargoObjectAlive(cargoName)
+    local staticObj = StaticObject.getByName(cargoName)
+    if not staticObj then
+        return false -- Object doesn't exist
+    end
+    
+    -- Check if object is alive (not destroyed)
+    local success, life = pcall(function() return staticObj:getLife() end)
+    if success then
+        return life > 0
+    else
+        -- If we can't get life, assume it exists and is alive
+        return true
+    end
+end
+
+-- Clean up destroyed cargo objects from tracking
+function CargoManagement.cleanupDestroyedCargo()
+    local removedCount = 0
+    local aliveCount = 0
+    
+    -- Check each tracked cargo object
+    for i = #MissionState.spawnedCargo, 1, -1 do
+        local cargo = MissionState.spawnedCargo[i]
+        if not CargoManagement.isCargoObjectAlive(cargo.name) then
+            -- Object has been destroyed, remove from tracking
+            table.remove(MissionState.spawnedCargo, i)
+            removedCount = removedCount + 1
+            Utils.showDebugMessage("Removed destroyed cargo from tracking: " .. cargo.name, 5, 2)
+        else
+            aliveCount = aliveCount + 1
+        end
+    end
+    
+    if removedCount > 0 then
+        Utils.showDebugMessage("Cleanup complete: " .. removedCount .. " destroyed, " .. aliveCount .. " alive", 5, 1)
+    end
+    
+    return removedCount
+end
+
 -- =====================================================================================
 -- RADIO MENU SYSTEM
 -- =====================================================================================
@@ -2537,7 +2850,7 @@ function RadioMenu.getMissionStatus()
             local zoneState = MissionState.missions.zoneStates[zoneName]
             
             if zoneState then
-                local status = "CLEAR"
+                local status = "COMPLETED"
                 if zoneState.samDeployed then
                     status = "SAM ACTIVE"
                 elseif zoneState.unitsCount > 0 then
@@ -2680,14 +2993,15 @@ function RadioMenu.initialize()
     -- Add commands for both coalitions
     for _, coalitionSide in pairs({coalition.side.RED, coalition.side.BLUE}) do
         missionCommands.addCommandForCoalition(coalitionSide, "Mission Status", mainMenu, RadioMenu.getMissionStatus)
-        missionCommands.addCommandForCoalition(coalitionSide, "Check Zone Status", mainMenu, RadioMenu.checkZoneStatus)
-        missionCommands.addCommandForCoalition(coalitionSide, "Check Truck Status", mainMenu, RadioMenu.checkTruckStatus)
-        missionCommands.addCommandForCoalition(coalitionSide, "Check Helicopter Status", mainMenu, RadioMenu.checkHeloStatus)
-        missionCommands.addCommandForCoalition(coalitionSide, "Start Zone Monitoring", mainMenu, ZoneMonitoring.startMultiZoneMonitoring)
-        missionCommands.addCommandForCoalition(coalitionSide, "Stop Zone Monitoring", mainMenu, ZoneMonitoring.stopMultiZoneMonitoring)
-        missionCommands.addCommandForCoalition(coalitionSide, "Manual Vehicle Cleanup", mainMenu, RadioMenu.manualCleanupVehicles)
-        missionCommands.addCommandForCoalition(coalitionSide, "Reset Spawn Counts", mainMenu, RadioMenu.resetSpawnCounts)
-        missionCommands.addCommandForCoalition(coalitionSide, "Reset All Missions", mainMenu, RadioMenu.resetMissions)
+        -- missionCommands.addCommandForCoalition(coalitionSide, "Check Zone Status", mainMenu, RadioMenu.checkZoneStatus)
+        -- missionCommands.addCommandForCoalition(coalitionSide, "Check Truck Status", mainMenu, RadioMenu.checkTruckStatus)
+        -- missionCommands.addCommandForCoalition(coalitionSide, "Check Helicopter Status", mainMenu, RadioMenu.checkHeloStatus)
+        -- missionCommands.addCommandForCoalition(coalitionSide, "Start Zone Monitoring", mainMenu, ZoneMonitoring.startMultiZoneMonitoring)
+        -- missionCommands.addCommandForCoalition(coalitionSide, "Stop Zone Monitoring", mainMenu, ZoneMonitoring.stopMultiZoneMonitoring)
+        -- missionCommands.addCommandForCoalition(coalitionSide, "Manual Vehicle Cleanup", mainMenu, RadioMenu.manualCleanupVehicles)
+        -- missionCommands.addCommandForCoalition(coalitionSide, "Reset Spawn Counts", mainMenu, RadioMenu.resetSpawnCounts)
+        -- missionCommands.addCommandForCoalition(coalitionSide, "Reset All Missions", mainMenu, RadioMenu.resetMissions)
+        missionCommands.addCommandForCoalition(coalitionSide, "Cleanup Destroyed Cargo", mainMenu, CargoManagement.cleanupDestroyedCargo)
     end
     
 end
@@ -2763,10 +3077,10 @@ local function initializeSupplyMission()
     CargoManagement.initialize()
     
     -- Display distance-based deployment configuration
-    Utils.showMessage("Distance-based vehicle selection: Trucks for targets within " .. CONFIG.ZONES.MAX_DISTANCE_FROM_DEPLOY .. "m, helicopters for longer distances.", 8)
+    Utils.showDebugMessage("Distance-based vehicle selection: Trucks for targets within " .. CONFIG.ZONES.MAX_DISTANCE_FROM_DEPLOY .. "m, helicopters for longer distances.", 8, 2)
     
     -- Display concurrent deployment limit
-    Utils.showMessage("Maximum concurrent deployments: " .. CONFIG.ZONES.MAX_CONCURRENT_DEPLOYMENTS, 8)
+    Utils.showDebugMessage("Maximum concurrent deployments: " .. CONFIG.ZONES.MAX_CONCURRENT_DEPLOYMENTS, 8, 2)
     
     -- Perform initial zone analysis
     
@@ -2813,193 +3127,14 @@ local function initializeSupplyMission()
     -- Start zone monitoring with delay to prevent initialization race conditions
     timer.scheduleFunction(function()
         ZoneMonitoring.startMultiZoneMonitoring()
-        Utils.showMessage("Zone monitoring started successfully!", 8)
+        Utils.showDebugMessage("Zone monitoring started successfully!", 8, 1)
         return nil
     end, nil, timer.getTime() + 10) -- 10 second delay to allow DCS to stabilize
     
     MissionState.initialized = true
-    Utils.showMessage("System will automatically dispatch vehicles when zones are cleared.", 8)
+    Utils.showMessage("Intel reports that enemy supplies are available, expect zones to be re-enforced if destroyed..", 10)
     
     return true
-end
-
--- Discover all supply zones (truck and helicopter spawn zones)
-function Utils.discoverSupplyZones()
-    local truckZones = {}
-    local heloZones = {}
-    local ammoZones = {}
-    
-    Utils.showDebugMessage("Discovering supply zones...", 5, 2)
-    
-    -- Try to discover zones using mission data first
-    local env = _G.env or {}
-    if env.mission and env.mission.triggers and env.mission.triggers.zones then
-        for _, zone in pairs(env.mission.triggers.zones) do
-            if zone.name then
-                local zoneName = zone.name
-                
-                -- Check for truck deploy zones
-                if string.find(zoneName, "^" .. CONFIG.ZONES.SUPPORT_TRUCK_DEPLOY) then
-                    local zoneObj = trigger.misc.getZone(zoneName)
-                    if zoneObj then
-                        table.insert(truckZones, {
-                            name = zoneName,
-                            zone = zoneObj
-                        })
-                        Utils.showDebugMessage("Found truck spawn zone: " .. zoneName, 5, 2)
-                    end
-                end
-                
-                -- Check for helo deploy zones
-                if string.find(zoneName, "^" .. CONFIG.ZONES.SUPPORT_HELO_DEPLOY) then
-                    local zoneObj = trigger.misc.getZone(zoneName)
-                    if zoneObj then
-                        table.insert(heloZones, {
-                            name = zoneName,
-                            zone = zoneObj
-                        })
-                        Utils.showDebugMessage("Found helo spawn zone: " .. zoneName, 5, 2)
-                    end
-                end
-
-                -- Check for ammo supply zones
-                if string.find(zoneName, "^" .. CONFIG.ZONES.SUPPORT_AMMO_SUPPLY) then
-                    local zoneObj = trigger.misc.getZone(zoneName)
-                    if zoneObj then
-                        table.insert(ammoZones, {
-                            name = zoneName,
-                            zone = zoneObj
-                        })
-                        Utils.showDebugMessage("Found ammo supply zone: " .. zoneName, 5, 2)
-                    end
-                end
-            end
-        end
-    end
-    
-    -- Fallback: Try to get zones by name pattern
-    if #truckZones == 0 and #heloZones == 0 and #ammoZones == 0 then
-        Utils.showDebugMessage("No supply zones found via mission data, trying name-based discovery...", 5, 2)
-        
-        -- Try common naming patterns for truck zones
-        for i = 0, 20 do  -- Check up to 20 numbered zones
-            local suffix = (i == 0) and "" or ("-" .. i)
-            
-            -- Truck zones
-            local truckZoneName = CONFIG.ZONES.SUPPORT_TRUCK_DEPLOY .. suffix
-            local truckZone = trigger.misc.getZone(truckZoneName)
-            if truckZone then
-                table.insert(truckZones, {
-                    name = truckZoneName,
-                    zone = truckZone
-                })
-                Utils.showDebugMessage("Found truck spawn zone: " .. truckZoneName, 5, 2)
-            end
-            
-            -- Helo zones
-            local heloZoneName = CONFIG.ZONES.SUPPORT_HELO_DEPLOY .. suffix
-            local heloZone = trigger.misc.getZone(heloZoneName)
-            if heloZone then
-                table.insert(heloZones, {
-                    name = heloZoneName,
-                    zone = heloZone
-                })
-                Utils.showDebugMessage("Found helo spawn zone: " .. heloZoneName, 5, 2)
-            end
-
-            -- ammoZones zones
-            local ammoZoneName = CONFIG.ZONES.SUPPORT_AMMO_SUPPLY .. suffix
-            local ammoZone = trigger.misc.getZone(ammoZoneName)
-            if ammoZone then
-                table.insert(ammoZone, {
-                    name = ammoZoneName,
-                    zone = ammoZone
-                })
-                Utils.showDebugMessage("Found ammo spawn zone: " .. ammoZoneName, 5, 2)
-            end
-        end
-    end
-    
-    -- Store discovered zones
-    MissionState.zones.truckSpawnZones = truckZones
-    MissionState.zones.heloSpawnZones = heloZones
-    MissionState.zones.ammoSpawnZones = ammoZones
-    
-    Utils.showMessage("Discovered " .. #truckZones .. " truck spawn zones and " .. #heloZones .. " helo spawn zones", 8)
-    
-    -- Set legacy references if base zones exist
-    for _, zoneInfo in pairs(truckZones) do
-        if zoneInfo.name == CONFIG.ZONES.SUPPORT_TRUCK_DEPLOY then
-            MissionState.zones.truckSpawn = zoneInfo.zone
-            break
-        end
-    end
-    
-    for _, zoneInfo in pairs(heloZones) do
-        if zoneInfo.name == CONFIG.ZONES.SUPPORT_HELO_DEPLOY then
-            MissionState.zones.heloSpawn = zoneInfo.zone
-            break
-        end
-    end
-
-    for _, zoneInfo in pairs(ammoZones) do
-        if zoneInfo.name == CONFIG.ZONES.SUPPORT_AMMO_SUPPLY then
-            MissionState.zones.ammoSpawnZone = zoneInfo.zone
-            break
-        end
-    end
-    
-    return #truckZones > 0 or #heloZones > 0 or #ammoZones > 0
-end
-
--- Find the closest supply zone of specified type to a target zone
-function Utils.getClosestSupplyZone(targetZone, vehicleType)
-    if not targetZone or not targetZone.point then
-        Utils.showDebugMessage("Invalid target zone for closest supply zone search", 5, 3)
-        return nil
-    end
-    
-    local targetPoint = {x = targetZone.point.x, z = targetZone.point.z}
-    local supplyZones = {}
-    
-    -- Get appropriate supply zones based on vehicle type
-    if vehicleType == "truck" then
-        supplyZones = MissionState.zones.truckSpawnZones
-    elseif vehicleType == "helo" then
-        supplyZones = MissionState.zones.heloSpawnZones
-    else
-        Utils.showDebugMessage("Invalid vehicle type for supply zone search: " .. tostring(vehicleType), 5, 3)
-        return nil
-    end
-    
-    if #supplyZones == 0 then
-        Utils.showDebugMessage("No " .. vehicleType .. " supply zones available", 5, 3)
-        return nil
-    end
-    
-    local closestZone = nil
-    local shortestDistance = math.huge
-    
-    -- Find the closest supply zone
-    for _, zoneInfo in pairs(supplyZones) do
-        if zoneInfo.zone and zoneInfo.zone.point then
-            local supplyPoint = {x = zoneInfo.zone.point.x, z = zoneInfo.zone.point.z}
-            local distance = Utils.getDistance(targetPoint, supplyPoint)
-            
-            Utils.showDebugMessage("Distance from " .. zoneInfo.name .. " to target: " .. math.floor(distance) .. "m", 5, 3)
-            
-            if distance < shortestDistance then
-                shortestDistance = distance
-                closestZone = zoneInfo
-            end
-        end
-    end
-    
-    if closestZone then
-        Utils.showDebugMessage("Closest " .. vehicleType .. " supply zone: " .. closestZone.name .. " (" .. math.floor(shortestDistance) .. "m away)", 5, 2)
-    end
-    
-    return closestZone, shortestDistance
 end
 
 -- =====================================================================================
