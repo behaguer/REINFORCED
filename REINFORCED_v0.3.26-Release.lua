@@ -22,7 +22,7 @@ local CONFIG = {
         SUPPORT_AMMO_SUPPLY = "SUPPORT_AMMO_SUPPLY", -- Zone for spawning random cargo/ammo supplies
         SR_SAM_DEPLOYMENT_PREFIX = "SR_SAM", -- Prefix for short range SAM deployment zones
         LR_SAM_DEPLOYMENT_PREFIX = "LR_SAM", -- Prefix for long range SAM deployment zones
-        MAX_DISTANCE_FROM_DEPLOY = 1000, -- Maximum distance from deployment zone to spawn SAM
+        MAX_DISTANCE_FROM_DEPLOY = 1500, -- Maximum distance from deployment zone to spawn SAM
         MAX_CONCURRENT_DEPLOYMENTS = 10 -- Maximum number of concurrent deployments
     },
     
@@ -425,181 +425,11 @@ end
 -- LOCAL FUNCTIONS (Forward Declaration)
 -- =====================================================================================
 
-local SAMDeployment = {}
 local ZoneDiscovery = {}
 local ZoneMonitoring = {}
 local VehicleSpawning = {}
 local RadioMenu = {}
 local CargoManagement = {}
-
--- =====================================================================================
--- SAM DEPLOYMENT SYSTEM
--- =====================================================================================
-
-function SAMDeployment.moveGroupToZone(group, targetZone)
-    if not group or not group:isExist() or not targetZone then
-        Utils.showDebugMessage("moveGroupToZone failed - invalid parameters", 5, 3)
-        Utils.showDebugMessage("Group: " .. tostring(group) .. ", Zone: " .. tostring(targetZone), 5, 3)
-        return false
-    end
-    
-    Utils.showDebugMessage("Moving group '" .. group:getName() .. "' to zone", 5, 3)
-    Utils.showDebugMessage("Target zone coordinates: x=" .. targetZone.point.x .. ", z=" .. targetZone.point.z, 5, 3)
-    
-    local routePoints = {
-        {
-            x = targetZone.point.x,
-            y = targetZone.point.z,
-            alt = 0,
-            type = "Turning Point",
-            ETA = 0,
-            ETA_locked = false,
-            speed = 0,
-            speed_locked = true,
-            formation_template = "",
-            task = {
-                id = "ComboTask",
-                params = { tasks = {} }
-            }
-        }
-    }
-    
-    local mission = {
-        id = "Mission",
-        params = {
-            route = { points = routePoints }
-        }
-    }
-    
-    local controller = group:getController()
-    if controller then
-        Utils.showDebugMessage("Group controller found, setting task", 5, 3)
-        local success = Utils.safeExecute(function()
-            controller:setTask(mission)
-            return true
-        end, "Failed to set group movement task")
-        
-        if success then
-            Utils.showDebugMessage("Group movement task set successfully", 5,3)
-            return true
-        else
-            Utils.showDebugMessage("Failed to set movement task", 5)
-            return false
-        end
-    else
-        Utils.showDebugMessage("Group controller not found", 5)
-        return false
-    end
-end
-
-function SAMDeployment.scheduleVehicleCleanup(missionType, zoneName)
-    -- Check if cleanup is enabled
-    if not CONFIG.SAM.ENABLE_VEHICLE_CLEANUP then
-        Utils.showDebugMessage("Vehicle cleanup disabled in configuration - vehicles will remain active", 5,3)
-        return
-    end
-    
-    local isHeloMission = (missionType == "helicopter")
-    
-    Utils.showDebugMessage("Scheduling ultra-safe vehicle cleanup for " .. missionType .. " mission in zone " .. (zoneName or "unknown"), 5 ,3)
-   
-    timer.scheduleFunction(function()
-        Utils.showDebugMessage("Vehicle cleanup timer executed for " .. missionType .. " in zone " .. (zoneName or "unknown"), 8,3)
-        
-        if isHeloMission then
-            -- Ultra-safe cleanup of helicopter for this specific zone only
-            if zoneName and MissionState.vehicles.supplyGroups[zoneName] then
-
-                local supplyGroup = MissionState.vehicles.supplyGroups[zoneName]
-                if supplyGroup and supplyGroup ~= "DEPLOYMENT_PENDING" then
-                    local groupName = "unknown"
-                    local success, nameResult = pcall(function() return supplyGroup:getName() end)
-                    if success then
-                        groupName = nameResult
-                    end
-                    
-                    -- Use simpler and more reliable cleanup approach
-                    local cleanupSuccess = pcall(function()
-                        if supplyGroup:isExist() then                          
-                            -- Method 1: Try immediate destruction (simplest and most reliable)
-                            supplyGroup:destroy()  
-                        end
-                    end)
-                    
-                    if cleanupSuccess then
-                        -- Utils.showMessage("Supply helicopter '" .. groupName .. "' completed mission for zone " .. zoneName .. " and returned to base.", 8)
-                    else
-                        Utils.showDebugMessage("Failed to initiate helicopter cleanup: " .. groupName, 5)
-                    end
-                end
-                
-                -- Remove from supply groups tracking to free up deployment slot
-                MissionState.vehicles.supplyGroups[zoneName] = nil
-                Utils.showDebugMessage("Removed helicopter supply group for zone " .. zoneName .. " from tracking", 5,3)
-            else
-                Utils.showDebugMessage("DEBUG: No helicopter supply group found for cleanup in zone " .. (zoneName or "unknown"), 8,3)
-            end
-            
-            -- Update zone-specific state only
-            if zoneName and MissionState.missions.zoneStates[zoneName] then
-                MissionState.missions.zoneStates[zoneName].heloActive = false
-            end
-            
-            -- Only clear legacy references if this was the legacy mission (no specific zone)
-            if not zoneName then
-                MissionState.vehicles.helo = nil
-                MissionState.missions.helo.active = false
-            end
-        else
-            -- Ultra-safe cleanup of truck for this specific zone only
-            if zoneName and MissionState.vehicles.supplyGroups[zoneName] then
-                local supplyGroup = MissionState.vehicles.supplyGroups[zoneName]
-                if supplyGroup and supplyGroup ~= "DEPLOYMENT_PENDING" then
-                    local groupName = "unknown"
-                    local success, nameResult = pcall(function() return supplyGroup:getName() end)
-                    if success then
-                        groupName = nameResult
-                    end
-                    
-                    -- Use simpler and more reliable cleanup approach
-                    local cleanupSuccess = pcall(function()
-                        if supplyGroup:isExist() then
-                            supplyGroup:destroy()
-                        end
-                    end)
-                    
-                    if cleanupSuccess then
-                        -- Utils.showMessage("Supply truck '" .. groupName .. "' completed mission for zone " .. zoneName .. " and withdrew.", 8)
-                    else
-                        Utils.showDebugMessage("Failed to initiate truck cleanup: " .. groupName, 5, 3)
-                    end
-                end
-                
-                -- Remove from supply groups tracking to free up deployment slot
-                MissionState.vehicles.supplyGroups[zoneName] = nil
-                Utils.showDebugMessage("Removed truck supply group for zone " .. zoneName .. " from tracking", 5,3)
-            else
-                Utils.showDebugMessage("DEBUG: No truck supply group found for cleanup in zone " .. (zoneName or "unknown"), 8)
-            end
-            
-            -- Update zone-specific state only
-            if zoneName and MissionState.missions.zoneStates[zoneName] then
-                MissionState.missions.zoneStates[zoneName].truckActive = false
-            end
-            
-            -- Only clear legacy references if this was the legacy mission (no specific zone)
-            if not zoneName then
-                MissionState.vehicles.truck = nil
-                MissionState.missions.truck.active = false
-            end
-        end
-        
-        Utils.showDebugMessage("Vehicle cleanup completed for " .. missionType .. " mission in zone " .. (zoneName or "legacy"), 5,3)
-        return nil
-    end, nil, timer.getTime() + CONFIG.SAM.CLEANUP_DELAY)
-    
-    Utils.showDebugMessage("Vehicle cleanup timer scheduled for " .. CONFIG.SAM.CLEANUP_DELAY .. " seconds", 5,3)
-end
 
 -- =====================================================================================
 -- ZONE DISCOVERY SYSTEM
@@ -824,8 +654,8 @@ function ZoneMonitoring.checkSingleZone(zoneInfo)
         return
     end
     
-    local zoneName = zoneInfo.name
     local zone = zoneInfo.zone
+    local zoneName = zoneInfo.name
     local zoneState = MissionState.missions.zoneStates[zoneName]
     
     if not zoneState then
@@ -948,11 +778,10 @@ function ZoneMonitoring.stopMultiZoneMonitoring()
 end
 
 -- =====================================================================================
--- SAM DEPLOYMENT FUNCTIONS 
--- Dependancy ZoneMonitoring
+-- VEHICLE SPAWNING SYSTEM
 -- =====================================================================================
 
-function SAMDeployment.spawnManually(templateName, targetZone, missionType, zoneName)
+function VehicleSpawning.spawnManually(templateName, targetZone, missionType, zoneName)
     
     local isHeloMission = (missionType == "helicopter")
     
@@ -1098,17 +927,13 @@ function SAMDeployment.spawnManually(templateName, targetZone, missionType, zone
         end
         
         -- Schedule vehicle cleanup
-        SAMDeployment.scheduleVehicleCleanup(missionType, zoneName)
+        VehicleSpawning.scheduleVehicleCleanup(missionType, zoneName)
         
         return true
     end
     
     return false
 end
-
--- =====================================================================================
--- VEHICLE SPAWNING SYSTEM
--- =====================================================================================
 
 -- Function to determine optimal vehicle type based on distance to closest supply zones
 function VehicleSpawning.determineOptimalVehicleType(targetZone)
@@ -1123,7 +948,7 @@ function VehicleSpawning.determineOptimalVehicleType(targetZone)
     
     -- If no supply zones are available, fall back to legacy zones
     if not closestTruckZone and not closestHeloZone then
-        Utils.showDebugMessage("No multi-zone supply zones found, using legacy method", 5, 2)
+        Utils.showDebugMessage("No multi-zone supply zones found, using legacy method", 5, 1)
         return VehicleSpawning.determineLegacyOptimalVehicleType(targetZone)
     end
     
@@ -1138,9 +963,9 @@ function VehicleSpawning.determineOptimalVehicleType(targetZone)
                 preferHelo = true
                 reason = "truck exceeds max range (" .. math.floor(truckDistance) .. "m > " .. CONFIG.ZONES.MAX_DISTANCE_FROM_DEPLOY .. "m), helicopter within extended range"
             else
-                -- Both exceed reasonable range, choose closer one
-                preferHelo = (heloDistance < truckDistance)
-                reason = "both exceed optimal range, choosing closer option (" .. (preferHelo and "helo: " .. math.floor(heloDistance) or "truck: " .. math.floor(truckDistance)) .. "m)"
+                -- Both exceed reasonable range, choose helo 
+                preferHelo = true
+                reason = "both exceed optimal range, choosing helo option (" .. (preferHelo and "helo: " .. math.floor(heloDistance) or "truck: " .. math.floor(truckDistance)) .. "m)"
             end
         else
             -- Truck is within range, choose based on efficiency (trucks for short range, helos for long range)
@@ -1163,7 +988,7 @@ function VehicleSpawning.determineOptimalVehicleType(targetZone)
     end
     
     local vehicleType = preferHelo and "helo" or "truck"
-    Utils.showDebugMessage("Vehicle selection: " .. vehicleType .. " - " .. reason, 5, 2)
+    Utils.showDebugMessage("Vehicle selection: " .. vehicleType .. " - " .. reason, 5, 1)
     
     return vehicleType
 end
@@ -1207,6 +1032,115 @@ function VehicleSpawning.determineLegacyOptimalVehicleType(targetZone)
     else
         return "truck"
     end
+end
+
+function VehicleSpawning.scheduleVehicleCleanup(missionType, zoneName)
+    -- Check if cleanup is enabled
+    if not CONFIG.SAM.ENABLE_VEHICLE_CLEANUP then
+        Utils.showDebugMessage("Vehicle cleanup disabled in configuration - vehicles will remain active", 5,3)
+        return
+    end
+    
+    local isHeloMission = (missionType == "helicopter")
+    
+    Utils.showDebugMessage("Scheduling ultra-safe vehicle cleanup for " .. missionType .. " mission in zone " .. (zoneName or "unknown"), 5 ,3)
+   
+    timer.scheduleFunction(function()
+        Utils.showDebugMessage("Vehicle cleanup timer executed for " .. missionType .. " in zone " .. (zoneName or "unknown"), 8,3)
+        
+        if isHeloMission then
+            -- Ultra-safe cleanup of helicopter for this specific zone only
+            if zoneName and MissionState.vehicles.supplyGroups[zoneName] then
+
+                local supplyGroup = MissionState.vehicles.supplyGroups[zoneName]
+                if supplyGroup and supplyGroup ~= "DEPLOYMENT_PENDING" then
+                    local groupName = "unknown"
+                    local success, nameResult = pcall(function() return supplyGroup:getName() end)
+                    if success then
+                        groupName = nameResult
+                    end
+                    
+                    -- Use simpler and more reliable cleanup approach
+                    local cleanupSuccess = pcall(function()
+                        if supplyGroup:isExist() then                          
+                            -- Method 1: Try immediate destruction (simplest and most reliable)
+                            supplyGroup:destroy()  
+                        end
+                    end)
+                    
+                    if cleanupSuccess then
+                        -- Utils.showMessage("Supply helicopter '" .. groupName .. "' completed mission for zone " .. zoneName .. " and returned to base.", 8)
+                    else
+                        Utils.showDebugMessage("Failed to initiate helicopter cleanup: " .. groupName, 5)
+                    end
+                end
+                
+                -- Remove from supply groups tracking to free up deployment slot
+                MissionState.vehicles.supplyGroups[zoneName] = nil
+                Utils.showDebugMessage("Removed helicopter supply group for zone " .. zoneName .. " from tracking", 5,3)
+            else
+                Utils.showDebugMessage("DEBUG: No helicopter supply group found for cleanup in zone " .. (zoneName or "unknown"), 8,3)
+            end
+            
+            -- Update zone-specific state only
+            if zoneName and MissionState.missions.zoneStates[zoneName] then
+                MissionState.missions.zoneStates[zoneName].heloActive = false
+            end
+            
+            -- Only clear legacy references if this was the legacy mission (no specific zone)
+            if not zoneName then
+                MissionState.vehicles.helo = nil
+                MissionState.missions.helo.active = false
+            end
+        else
+            -- Ultra-safe cleanup of truck for this specific zone only
+            if zoneName and MissionState.vehicles.supplyGroups[zoneName] then
+                local supplyGroup = MissionState.vehicles.supplyGroups[zoneName]
+                if supplyGroup and supplyGroup ~= "DEPLOYMENT_PENDING" then
+                    local groupName = "unknown"
+                    local success, nameResult = pcall(function() return supplyGroup:getName() end)
+                    if success then
+                        groupName = nameResult
+                    end
+                    
+                    -- Use simpler and more reliable cleanup approach
+                    local cleanupSuccess = pcall(function()
+                        if supplyGroup:isExist() then
+                            supplyGroup:destroy()
+                        end
+                    end)
+                    
+                    if cleanupSuccess then
+                        -- Utils.showMessage("Supply truck '" .. groupName .. "' completed mission for zone " .. zoneName .. " and withdrew.", 8)
+                    else
+                        Utils.showDebugMessage("Failed to initiate truck cleanup: " .. groupName, 5, 3)
+                    end
+                end
+                
+                -- Remove from supply groups tracking to free up deployment slot
+                MissionState.vehicles.supplyGroups[zoneName] = nil
+                Utils.showDebugMessage("Removed truck supply group for zone " .. zoneName .. " from tracking", 5,3)
+            else
+                Utils.showDebugMessage("DEBUG: No truck supply group found for cleanup in zone " .. (zoneName or "unknown"), 8)
+            end
+            
+            -- Update zone-specific state only
+            if zoneName and MissionState.missions.zoneStates[zoneName] then
+                MissionState.missions.zoneStates[zoneName].truckActive = false
+            end
+            
+            -- Only clear legacy references if this was the legacy mission (no specific zone)
+            if not zoneName then
+                MissionState.vehicles.truck = nil
+                MissionState.missions.truck.active = false
+            end
+        end
+        
+        Utils.showDebugMessage("Vehicle cleanup completed for " .. missionType .. " mission in zone " .. (zoneName or "legacy"), 5,3)
+        return nil
+    end, nil, timer.getTime() + CONFIG.SAM.CLEANUP_DELAY)
+    
+    Utils.showDebugMessage("Vehicle cleanup timer scheduled for " .. CONFIG.SAM.CLEANUP_DELAY .. " seconds", 5,3)
 end
 
 -- New zone-specific spawning functions that create unique groups
@@ -1758,7 +1692,7 @@ function VehicleSpawning.startTruckPositionMonitoringForZone(zoneInfo, supplyGro
         if leadUnit and leadUnit:isExist() then
             local truckPos = leadUnit:getPosition().p
             if truckPos and Utils.isPointInZone(truckPos, targetZone) then
-                SAMDeployment.spawnManually(nil, targetZone, "truck", zoneName)
+                VehicleSpawning.spawnManually(nil, targetZone, "truck", zoneName)
                 return nil -- Stop checking
             end
         end
@@ -2007,7 +1941,7 @@ function VehicleSpawning.startHeloPositionMonitoringForZone(zoneInfo, supplyGrou
                     
                     -- Schedule SAM deployment
                     timer.scheduleFunction(function()
-                        SAMDeployment.spawnManually(nil, targetZone, "helicopter", zoneName)
+                        VehicleSpawning.spawnManually(nil, targetZone, "helicopter", zoneName)
                     end, nil, timer.getTime() + 1)
                     
                     return nil -- Stop checking
