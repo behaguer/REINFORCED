@@ -10,7 +10,10 @@
 -- - Automatic vehicle type optimization based on CONFIG.MAX_DISTANCE_FROM_DEPLOY setting
 -- - Concurrent deployment limiting via CONFIG.MAX_CONCURRENT_DEPLOYMENTS setting
 
--- v0.3.25 - HIERARCHICAL DEBUG LEVELS:
+-- v0.3.26 - CONTAINERS LOGIC AND FUNCTIONS
+--   * Added container spawn management
+--   * Added supply spawn logic and functions
+-- v0.3.25 - CONTAINERS:
 --   * Added container spawns
 --   * Added supply grid layout logig
 -- v0.3.24 - HIERARCHICAL DEBUG LEVELS:

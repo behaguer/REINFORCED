@@ -2,7 +2,7 @@
 -- DCS REINFORCED AUTO-RESUPPLY MISSION SCRIPT - COMPLETE VERSION
 -- Description: Automated supply truck and helicopter missions for local SAM site replacement
 -- Author: MythNZ
--- Version: 0.3.25 (Inital Release)
+-- Version: 0.3.26 (Inital Release)
 -- =====================================================================================
 
 -- =====================================================================================
@@ -57,6 +57,8 @@ local CONFIG = {
     -- Vehicle Route Settings
     VEHICLE = {
         TRUCK_SPEED = 20,
+        TRUCK_SUPPLY_COST = 1, -- Cost per supply truck deployment
+        HELO_SUPPLY_COST = 2, -- Cost per supply helo deployment
         HELO_SPEED = 50,
         HELO_ALTITUDE = 500,
         ENABLE_HELICOPTER_SPAWNING = true
@@ -1211,6 +1213,13 @@ end
 function VehicleSpawning.spawnNewTruckForZone(zoneName, uniqueGroupName, targetZone)
     Utils.showDebugMessage("Creating new supply truck group for zone " .. zoneName .. "...", 5,2)
     
+    -- Check if we can afford the supply cost for truck deployment
+    local supplyCost = CONFIG.VEHICLE.TRUCK_SUPPLY_COST or 1
+    if not CargoManagement.canAffordDeployment(targetZone, "Supply Truck", supplyCost) then
+        Utils.showMessage("Insufficient supply cargo to deploy truck in zone: " .. zoneName .. " (need " .. supplyCost .. " units)", 8)
+        return false
+    end
+    
     -- Find the closest truck supply zone to the target
     local closestSupplyZone, distance = Utils.getClosestSupplyZone(targetZone, "truck")
     local spawnPoint
@@ -1301,6 +1310,15 @@ function VehicleSpawning.spawnNewTruckForZone(zoneName, uniqueGroupName, targetZ
                 local units = newGroup:getUnits()
                 if units and #units > 0 then
                     Utils.showDebugMessage("Supply truck spawned successfully for zone " .. zoneName .. " with " .. #units .. " units!", 8,3)
+                    
+                    -- Deduct supply cost from the nearest ammo supply zone
+                    local costDeducted = CargoManagement.deductSupplyCost(targetZone, "Supply Truck", supplyCost)
+                    if costDeducted then
+                        Utils.showMessage("Deducted " .. supplyCost .. " supply units for truck deployment in " .. zoneName, 8)
+                    else
+                        Utils.showDebugMessage("Warning: Failed to deduct supply cost for truck deployment", 5)
+                    end
+                    
                     -- Store the group reference for this zone
                     MissionState.vehicles.supplyGroups[zoneName] = newGroup
                     -- Update legacy reference for compatibility
@@ -1329,6 +1347,13 @@ function VehicleSpawning.spawnNewHeloForZone(zoneName, uniqueGroupName, targetZo
     end
     
     Utils.showDebugMessage("Creating crash-safe helicopter group for zone " .. zoneName .. "...", 5,2)
+    
+    -- Check if we can afford the supply cost for helicopter deployment
+    local supplyCost = CONFIG.VEHICLE.HELO_SUPPLY_COST or 2
+    if not CargoManagement.canAffordDeployment(targetZone, "Supply Helicopter", supplyCost) then
+        Utils.showMessage("Insufficient supply cargo to deploy helicopter in zone: " .. zoneName .. " (need " .. supplyCost .. " units)", 8)
+        return false
+    end
     
     -- Find the closest helicopter supply zone to the target
     local closestSupplyZone, distance = Utils.getClosestSupplyZone(targetZone, "helo")
@@ -1473,6 +1498,15 @@ function VehicleSpawning.spawnNewHeloForZone(zoneName, uniqueGroupName, targetZo
             local units = newGroup:getUnits()
             if units and #units > 0 then
                 Utils.showMessage("Supply helicopter spawned successfully for zone " .. zoneName .. " and is flying to target!", 8)
+                
+                -- Deduct supply cost from the nearest ammo supply zone
+                local costDeducted = CargoManagement.deductSupplyCost(targetZone, "Supply Helicopter", supplyCost)
+                if costDeducted then
+                    Utils.showMessage("Deducted " .. supplyCost .. " supply units for helicopter deployment in " .. zoneName, 8)
+                else
+                    Utils.showDebugMessage("Warning: Failed to deduct supply cost for helicopter deployment", 5)
+                end
+                
                 -- Store the group reference for this zone
                 MissionState.vehicles.supplyGroups[zoneName] = newGroup
                 -- Update legacy reference for compatibility
@@ -2307,6 +2341,190 @@ end
 -- Get all ammo supply zones
 function CargoManagement.getAllAmmoSupplyZones()
     return MissionState.zones.ammoSpawnZones or {}
+end
+
+-- Find the closest ammo supply zone to a target zone for supply cost deduction
+function CargoManagement.getClosestAmmoSupplyZone(targetZone)
+    if not targetZone or not targetZone.point then
+        Utils.showDebugMessage("Invalid target zone for closest ammo supply zone search", 5, 3)
+        return nil
+    end
+    
+    if not MissionState.zones.ammoSpawnZones or #MissionState.zones.ammoSpawnZones == 0 then
+        Utils.showDebugMessage("No ammo supply zones available for supply cost calculation", 5, 3)
+        return nil
+    end
+    
+    local targetPoint = {x = targetZone.point.x, z = targetZone.point.z}
+    local closestZone = nil
+    local shortestDistance = math.huge
+    
+    -- Find the closest ammo supply zone
+    for _, zoneInfo in pairs(MissionState.zones.ammoSpawnZones) do
+        if zoneInfo.zone and zoneInfo.zone.point then
+            local supplyPoint = {x = zoneInfo.zone.point.x, z = zoneInfo.zone.point.z}
+            local distance = Utils.getDistance(targetPoint, supplyPoint)
+            
+            if distance < shortestDistance then
+                shortestDistance = distance
+                closestZone = zoneInfo
+            end
+        end
+    end
+    
+    if closestZone then
+        Utils.showDebugMessage("Closest ammo supply zone: " .. closestZone.name .. " (" .. math.floor(shortestDistance) .. "m away)", 5, 3)
+    end
+    
+    return closestZone, shortestDistance
+end
+
+-- Deduct supply cargo units from the nearest ammo supply zone
+function CargoManagement.deductSupplyCost(targetZone, vehicleType, supplyCost)
+    if not targetZone or not vehicleType or not supplyCost or supplyCost <= 0 then
+        Utils.showDebugMessage("Invalid parameters for supply cost deduction", 5, 3)
+        return false
+    end
+    
+    -- Find the closest ammo supply zone
+    local closestAmmoZone, distance = CargoManagement.getClosestAmmoSupplyZone(targetZone)
+    if not closestAmmoZone then
+        Utils.showDebugMessage("No ammo supply zone found for supply cost deduction", 5)
+        return false
+    end
+    
+    local zoneName = closestAmmoZone.name
+    local unitsToRemove = supplyCost
+    local removedUnits = 0
+    
+    Utils.showDebugMessage("Deducting " .. supplyCost .. " supply units from " .. zoneName .. " for " .. vehicleType .. " deployment", 8, 1)
+    
+    -- Count current cargo in this zone
+    local cargoInZone = {}
+    for i, cargo in ipairs(MissionState.spawnedCargo) do
+        if cargo.position then
+            local cargoPoint = {x = cargo.position.x, z = cargo.position.z}
+            if Utils.isPointInZone(cargoPoint, closestAmmoZone.zone) then
+                table.insert(cargoInZone, {index = i, cargo = cargo})
+            end
+        end
+    end
+    
+    Utils.showDebugMessage("Found " .. #cargoInZone .. " cargo units in zone " .. zoneName, 5, 3)
+    
+    if #cargoInZone < unitsToRemove then
+        Utils.showDebugMessage("WARNING: Not enough cargo in zone " .. zoneName .. " (need " .. unitsToRemove .. ", have " .. #cargoInZone .. ")", 8, 1)
+        unitsToRemove = #cargoInZone -- Remove what we can
+    end
+    
+    -- Remove cargo objects starting from the end of the list
+    for i = #cargoInZone, math.max(1, #cargoInZone - unitsToRemove + 1), -1 do
+        local cargoIndex = cargoInZone[i].index
+        local cargo = cargoInZone[i].cargo
+        
+        -- Try to remove the static object from DCS
+        local success = Utils.safeExecute(function()
+            local staticObj = StaticObject.getByName(cargo.name)
+            if staticObj then
+                staticObj:destroy()
+                Utils.showDebugMessage("Removed cargo object: " .. cargo.name, 5, 3)
+                return true
+            else
+                Utils.showDebugMessage("Cargo object not found in DCS: " .. cargo.name, 5, 3)
+                return true -- Still count as success for tracking purposes
+            end
+        end, "Failed to remove cargo object: " .. cargo.name)
+        
+        if success then
+            -- Remove from our tracking
+            table.remove(MissionState.spawnedCargo, cargoIndex)
+            removedUnits = removedUnits + 1
+            
+            -- Update indices for remaining items (since we removed from the middle)
+            for j = i - 1, 1, -1 do
+                if cargoInZone[j].index > cargoIndex then
+                    cargoInZone[j].index = cargoInZone[j].index - 1
+                end
+            end
+        else
+            Utils.showDebugMessage("Failed to remove cargo: " .. cargo.name, 5)
+        end
+    end
+    
+    -- Update grid state for this zone (reset grid positioning if we removed items)
+    if removedUnits > 0 and MissionState.gridStates and MissionState.gridStates[zoneName] then
+        local gridState = MissionState.gridStates[zoneName]
+        local gridSize = 6 -- 6x6 grid
+        local itemsPerGrid = gridSize * gridSize
+        
+        -- Calculate how many complete grids we should have with remaining cargo
+        local remainingCargoInZone = #cargoInZone - removedUnits
+        local completeGrids = math.floor(remainingCargoInZone / itemsPerGrid)
+        local remainingItems = remainingCargoInZone % itemsPerGrid
+        
+        -- Update grid state to reflect the new reality
+        if remainingItems == 0 and completeGrids > 0 then
+            -- We have complete grids, position at the start of the next grid
+            gridState.currentGrid = completeGrids + 1
+            gridState.currentRow = 1
+            gridState.currentCol = 1
+        else
+            -- Position after the remaining items
+            local currentGrid = completeGrids + 1
+            local row = math.floor((remainingItems - 1) / gridSize) + 1
+            local col = ((remainingItems - 1) % gridSize) + 1
+            
+            gridState.currentGrid = currentGrid
+            gridState.currentRow = row
+            gridState.currentCol = col + 1 -- Next position
+            
+            -- Handle overflow to next row/grid
+            if gridState.currentCol > gridSize then
+                gridState.currentCol = 1
+                gridState.currentRow = gridState.currentRow + 1
+                if gridState.currentRow > gridSize then
+                    gridState.currentRow = 1
+                    gridState.currentGrid = gridState.currentGrid + 1
+                end
+            end
+        end
+        
+        Utils.showDebugMessage("Updated grid state for " .. zoneName .. " - Grid:" .. gridState.currentGrid .. " Row:" .. gridState.currentRow .. " Col:" .. gridState.currentCol, 5, 3)
+    end
+    
+    Utils.showDebugMessage("Supply cost deduction completed: removed " .. removedUnits .. " units from " .. zoneName, 8, 1)
+    Utils.showDebugMessage("Remaining cargo count: " .. #MissionState.spawnedCargo, 5, 2)
+    
+    return removedUnits > 0
+end
+
+-- Check if there are enough supply units available for a deployment
+function CargoManagement.canAffordDeployment(targetZone, vehicleType, supplyCost)
+    if not targetZone or not vehicleType or not supplyCost or supplyCost <= 0 then
+        return false
+    end
+    
+    -- Find the closest ammo supply zone
+    local closestAmmoZone = CargoManagement.getClosestAmmoSupplyZone(targetZone)
+    if not closestAmmoZone then
+        return false
+    end
+    
+    -- Count current cargo in this zone
+    local cargoInZone = 0
+    for _, cargo in ipairs(MissionState.spawnedCargo) do
+        if cargo.position then
+            local cargoPoint = {x = cargo.position.x, z = cargo.position.z}
+            if Utils.isPointInZone(cargoPoint, closestAmmoZone.zone) then
+                cargoInZone = cargoInZone + 1
+            end
+        end
+    end
+    
+    local canAfford = cargoInZone >= supplyCost
+    Utils.showDebugMessage("Supply check for " .. vehicleType .. ": need " .. supplyCost .. ", have " .. cargoInZone .. " in " .. closestAmmoZone.name .. " - " .. (canAfford and "OK" or "INSUFFICIENT"), 5, 3)
+    
+    return canAfford
 end
 
 -- =====================================================================================

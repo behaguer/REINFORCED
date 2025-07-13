@@ -3,7 +3,7 @@
 -- DCS REINFORCED AUTO-RESUPPLY MISSION SCRIPT - COMPLETE VERSION
 -- Description: Automated supply truck and helicopter missions for local SAM site replacement
 -- Author: MythNZ
--- Version: 0.3.25 (Inital Release)
+-- Version: 0.3.26 (Inital Release)
 
 This is an example of unit scripting that will utilize zone based unit management and SAM reinforcement.
 
